@@ -78,6 +78,12 @@ func (s *statementImpl) ExecuteSchema(_ context.Context) (*arrow.Schema, error) 
 // ExecuteQuery runs the SQL query on Athena, waits for completion, and returns
 // an array.RecordReader over the results.
 func (s *statementImpl) ExecuteQuery(ctx context.Context) (array.RecordReader, int64, error) {
+	if s.conn == nil {
+		return nil, -1, adbc.Error{
+			Msg:  "[athena] statement already closed",
+			Code: adbc.StatusInvalidState,
+		}
+	}
 	if s.query == "" {
 		return nil, -1, adbc.Error{
 			Code: adbc.StatusInvalidState,
@@ -197,23 +203,26 @@ func (s *statementImpl) waitForQuery(ctx context.Context, execID *string) error 
 	}
 }
 
-func (s *statementImpl) fetchResults(ctx context.Context, execID *string) ([]types.Row, []types.ColumnInfo, error) {
+func (s *statementImpl) forEachResultPage(ctx context.Context, execID *string, fn func([]types.Row, []types.ColumnInfo) error) error {
 	input := &athenaSDK.GetQueryResultsInput{
 		QueryExecutionId: execID,
 	}
 
-	var rows []types.Row
-	var colInfo []types.ColumnInfo
 	firstPage := true
-
 	paginator := athenaSDK.NewGetQueryResultsPaginator(s.conn.athenaClient, input)
 	for paginator.HasMorePages() {
 		page, err := paginator.NextPage(ctx)
 		if err != nil {
-			return nil, nil, adbc.Error{
+			return adbc.Error{
 				Code: adbc.StatusIO,
 				Msg:  fmt.Sprintf("[athena] GetQueryResults failed: %v", err),
 			}
+		}
+
+		var rows []types.Row
+		var colInfo []types.ColumnInfo
+		if page.ResultSet != nil {
+			rows = page.ResultSet.Rows
 		}
 
 		if firstPage {
@@ -221,17 +230,40 @@ func (s *statementImpl) fetchResults(ctx context.Context, execID *string) ([]typ
 				colInfo = page.ResultSet.ResultSetMetadata.ColumnInfo
 			}
 			// The first row of the first page is a header row — skip it.
-			if page.ResultSet != nil && len(page.ResultSet.Rows) > 0 {
-				rows = append(rows, page.ResultSet.Rows[1:]...)
+			if len(rows) > 0 {
+				rows = rows[1:]
 			}
 			firstPage = false
-		} else {
-			if page.ResultSet != nil {
-				rows = append(rows, page.ResultSet.Rows...)
-			}
+		}
+
+		if len(rows) == 0 && len(colInfo) == 0 {
+			continue
+		}
+
+		if err := fn(rows, colInfo); err != nil {
+			return err
 		}
 	}
 
+	return nil
+}
+
+func (s *statementImpl) fetchResults(ctx context.Context, execID *string) ([]types.Row, []types.ColumnInfo, error) {
+	var rows []types.Row
+	var colInfo []types.ColumnInfo
+
+	err := s.forEachResultPage(ctx, execID, func(pageRows []types.Row, pageColInfo []types.ColumnInfo) error {
+		if len(pageColInfo) > 0 && len(colInfo) == 0 {
+			colInfo = pageColInfo
+		}
+		if len(pageRows) > 0 {
+			rows = append(rows, pageRows...)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
 	return rows, colInfo, nil
 }
 
