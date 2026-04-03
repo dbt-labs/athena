@@ -76,7 +76,8 @@ func (s *statementImpl) ExecuteSchema(_ context.Context) (*arrow.Schema, error) 
 }
 
 // ExecuteQuery runs the SQL query on Athena, waits for completion, and returns
-// an array.RecordReader over the results.
+// an array.RecordReader over the results. Results are accumulated as one Arrow
+// record batch per Athena result page to limit peak memory usage.
 func (s *statementImpl) ExecuteQuery(ctx context.Context) (array.RecordReader, int64, error) {
 	if s.conn == nil {
 		return nil, -1, adbc.Error{
@@ -100,12 +101,7 @@ func (s *statementImpl) ExecuteQuery(ctx context.Context) (array.RecordReader, i
 		return nil, -1, err
 	}
 
-	rows, colInfo, err := s.fetchResults(ctx, execID)
-	if err != nil {
-		return nil, -1, err
-	}
-
-	rdr, err := newRecordReader(s.conn.Alloc, colInfo, rows)
+	rdr, err := s.buildPagedRecordReader(ctx, execID)
 	if err != nil {
 		return nil, -1, err
 	}
@@ -115,6 +111,12 @@ func (s *statementImpl) ExecuteQuery(ctx context.Context) (array.RecordReader, i
 
 // ExecuteUpdate runs a DML statement on Athena and returns -1 (rows affected unknown).
 func (s *statementImpl) ExecuteUpdate(ctx context.Context) (int64, error) {
+	if s.conn == nil {
+		return -1, adbc.Error{
+			Msg:  "[athena] statement already closed",
+			Code: adbc.StatusInvalidState,
+		}
+	}
 	if s.query == "" {
 		return -1, adbc.Error{
 			Code: adbc.StatusInvalidState,
@@ -138,12 +140,14 @@ func (s *statementImpl) startQuery(ctx context.Context) (*string, error) {
 	input := &athenaSDK.StartQueryExecutionInput{
 		QueryString: &s.query,
 		QueryExecutionContext: &types.QueryExecutionContext{
-			Catalog:  nilIfEmpty(s.conn.db.catalog),
-			Database: nilIfEmpty(s.conn.db.schema),
+			Catalog:  nilIfEmpty(s.conn.catalog),
+			Database: nilIfEmpty(s.conn.schema),
 		},
-		ResultConfiguration: &types.ResultConfiguration{
+	}
+	if s.conn.db.s3StagingDir != "" {
+		input.ResultConfiguration = &types.ResultConfiguration{
 			OutputLocation: &s.conn.db.s3StagingDir,
-		},
+		}
 	}
 	if s.conn.db.workGroup != "" {
 		input.WorkGroup = &s.conn.db.workGroup
@@ -160,7 +164,23 @@ func (s *statementImpl) startQuery(ctx context.Context) (*string, error) {
 }
 
 func (s *statementImpl) waitForQuery(ctx context.Context, execID *string) error {
+	timer := time.NewTimer(0)
+	defer timer.Stop()
+
 	for {
+		select {
+		case <-ctx.Done():
+			// Best-effort: stop the running Athena query to avoid unnecessary cost.
+			_, _ = s.conn.athenaClient.StopQueryExecution(context.Background(), &athenaSDK.StopQueryExecutionInput{
+				QueryExecutionId: execID,
+			})
+			return adbc.Error{
+				Code: adbc.StatusCancelled,
+				Msg:  ctx.Err().Error(),
+			}
+		case <-timer.C:
+		}
+
 		out, err := s.conn.athenaClient.GetQueryExecution(ctx, &athenaSDK.GetQueryExecutionInput{
 			QueryExecutionId: execID,
 		})
@@ -190,84 +210,79 @@ func (s *statementImpl) waitForQuery(ctx context.Context, execID *string) error 
 				Msg:  "[athena] query was cancelled",
 			}
 		default:
-			// QUEUED or RUNNING — poll again
-			select {
-			case <-ctx.Done():
-				return adbc.Error{
-					Code: adbc.StatusCancelled,
-					Msg:  ctx.Err().Error(),
-				}
-			case <-time.After(500 * time.Millisecond):
-			}
+			// QUEUED or RUNNING — reset timer and poll again.
+			timer.Reset(500 * time.Millisecond)
 		}
 	}
 }
 
-func (s *statementImpl) forEachResultPage(ctx context.Context, execID *string, fn func([]types.Row, []types.ColumnInfo) error) error {
+// buildPagedRecordReader fetches Athena results page-by-page and builds one
+// Arrow record batch per page, limiting peak in-memory row storage.
+func (s *statementImpl) buildPagedRecordReader(ctx context.Context, execID *string) (array.RecordReader, error) {
 	input := &athenaSDK.GetQueryResultsInput{
 		QueryExecutionId: execID,
 	}
 
+	var schema *arrow.Schema
+	var colInfo []types.ColumnInfo
+	var batches []arrow.Record
 	firstPage := true
+
 	paginator := athenaSDK.NewGetQueryResultsPaginator(s.conn.athenaClient, input)
 	for paginator.HasMorePages() {
 		page, err := paginator.NextPage(ctx)
 		if err != nil {
-			return adbc.Error{
+			for _, b := range batches {
+				b.Release()
+			}
+			return nil, adbc.Error{
 				Code: adbc.StatusIO,
 				Msg:  fmt.Sprintf("[athena] GetQueryResults failed: %v", err),
 			}
 		}
 
-		var rows []types.Row
-		var colInfo []types.ColumnInfo
-		if page.ResultSet != nil {
-			rows = page.ResultSet.Rows
+		if page.ResultSet == nil {
+			continue
 		}
 
+		rows := page.ResultSet.Rows
 		if firstPage {
-			if page.ResultSet != nil && page.ResultSet.ResultSetMetadata != nil {
+			if page.ResultSet.ResultSetMetadata != nil {
 				colInfo = page.ResultSet.ResultSetMetadata.ColumnInfo
 			}
 			// The first row of the first page is a header row — skip it.
 			if len(rows) > 0 {
 				rows = rows[1:]
 			}
+			schema = buildSchema(colInfo)
 			firstPage = false
 		}
 
-		if len(rows) == 0 && len(colInfo) == 0 {
+		if len(rows) == 0 {
 			continue
 		}
 
-		if err := fn(rows, colInfo); err != nil {
-			return err
+		batch, err := buildRecordBatch(s.conn.Alloc, schema, colInfo, rows)
+		if err != nil {
+			for _, b := range batches {
+				b.Release()
+			}
+			return nil, err
 		}
+		batches = append(batches, batch)
 	}
 
-	return nil
-}
-
-func (s *statementImpl) fetchResults(ctx context.Context, execID *string) ([]types.Row, []types.ColumnInfo, error) {
-	var rows []types.Row
-	var colInfo []types.ColumnInfo
-
-	err := s.forEachResultPage(ctx, execID, func(pageRows []types.Row, pageColInfo []types.ColumnInfo) error {
-		if len(pageColInfo) > 0 && len(colInfo) == 0 {
-			colInfo = pageColInfo
-		}
-		if len(pageRows) > 0 {
-			rows = append(rows, pageRows...)
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, nil, err
+	if schema == nil {
+		// Query returned no metadata (e.g. DDL with no result set).
+		schema = arrow.NewSchema(nil, nil)
 	}
-	return rows, colInfo, nil
+
+	// Note: do NOT release batches here; array.NewRecordReader retains them and
+	// the caller is responsible for calling Release() on the returned RecordReader.
+	return array.NewRecordReader(schema, batches)
 }
 
-func (s *statementImpl) Bind(_ context.Context, _ arrow.RecordBatch) error {
+func (s *statementImpl) Bind(_ context.Context, _ arrow.Record) error {
 	return adbc.Error{
 		Code: adbc.StatusNotImplemented,
 		Msg:  "[athena] Bind not implemented",

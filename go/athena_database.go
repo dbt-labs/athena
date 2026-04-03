@@ -43,28 +43,22 @@ type databaseImpl struct {
 	secretKey    string
 	sessionToken string
 	profileName  string
-
-	// testClient is non-nil only during tests; when set, Open skips AWS
-	// credential resolution and uses this client directly.
-	testClient athenaClientAPI
 }
 
 func (d *databaseImpl) Open(ctx context.Context) (adbc.Connection, error) {
-	var client athenaClientAPI
-	if d.testClient != nil {
-		client = d.testClient
-	} else {
-		cfg, err := d.buildAWSConfig(ctx)
-		if err != nil {
-			return nil, err
-		}
-		client = athenaSDK.NewFromConfig(cfg)
+	cfg, err := d.buildAWSConfig(ctx)
+	if err != nil {
+		return nil, err
 	}
+
+	client := athenaSDK.NewFromConfig(cfg)
 
 	conn := &connectionImpl{
 		ConnectionImplBase: driverbase.NewConnectionImplBase(&d.DatabaseImplBase),
 		athenaClient:       client,
 		db:                 d,
+		catalog:            d.catalog,
+		schema:             d.schema,
 	}
 
 	return driverbase.NewConnectionBuilder(conn).

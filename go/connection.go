@@ -30,8 +30,14 @@ import (
 type connectionImpl struct {
 	driverbase.ConnectionImplBase
 
-	athenaClient athenaClientAPI
+	athenaClient *athenaSDK.Client
 	db           *databaseImpl
+
+	// catalog and schema are per-connection copies of the database defaults,
+	// so that SetCurrentCatalog/SetCurrentDbSchema on one connection does not
+	// affect sibling connections opened from the same database.
+	catalog string
+	schema  string
 }
 
 func (c *connectionImpl) Close() error {

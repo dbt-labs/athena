@@ -6,6 +6,9 @@
 *.dylib
 *.test
 *.out
+# Compiled Go binaries produced by `go build` (no extension on Linux/macOS)
+/go/check_*
+/go/athena
 
 # Go module cache
 vendor/
