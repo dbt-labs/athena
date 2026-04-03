@@ -55,11 +55,11 @@ func (c *connectionImpl) NewStatement() (adbc.Statement, error) {
 
 // GetTableSchema uses Athena's GetTableMetadata API to return an Arrow schema.
 func (c *connectionImpl) GetTableSchema(ctx context.Context, catalog *string, dbSchema *string, tableName string) (*arrow.Schema, error) {
-	cat := c.catalog
+	cat := c.db.catalog
 	if catalog != nil && *catalog != "" {
 		cat = *catalog
 	}
-	sch := c.schema
+	sch := c.db.schema
 	if dbSchema != nil && *dbSchema != "" {
 		sch = *dbSchema
 	}
@@ -105,20 +105,20 @@ func (c *connectionImpl) GetTableSchema(ctx context.Context, catalog *string, db
 // CurrentNamespacer interface implementation.
 
 func (c *connectionImpl) GetCurrentCatalog() (string, error) {
-	return c.catalog, nil
+	return c.db.catalog, nil
 }
 
 func (c *connectionImpl) GetCurrentDbSchema() (string, error) {
-	return c.schema, nil
+	return c.db.schema, nil
 }
 
 func (c *connectionImpl) SetCurrentCatalog(catalog string) error {
-	c.catalog = catalog
+	c.db.catalog = catalog
 	return nil
 }
 
 func (c *connectionImpl) SetCurrentDbSchema(schema string) error {
-	c.schema = schema
+	c.db.schema = schema
 	return nil
 }
 
@@ -131,11 +131,11 @@ func (c *connectionImpl) ListTableTypes(_ context.Context) ([]string, error) {
 // DbObjectsEnumerator interface implementation.
 
 func (c *connectionImpl) GetCatalogs(ctx context.Context, catalogFilter *string) ([]string, error) {
-	if c.catalog != "" {
-		if catalogFilter != nil && *catalogFilter != "" && c.catalog != *catalogFilter {
+	if c.db.catalog != "" {
+		if catalogFilter != nil && *catalogFilter != "" && c.db.catalog != *catalogFilter {
 			return nil, nil
 		}
-		return []string{c.catalog}, nil
+		return []string{c.db.catalog}, nil
 	}
 
 	listInput := &athenaSDK.ListDataCatalogsInput{}

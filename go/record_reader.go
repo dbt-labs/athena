@@ -42,7 +42,7 @@ func newRecordReader(alloc memory.Allocator, colInfo []types.ColumnInfo, rows []
 	}
 	defer batch.Release()
 
-	return array.NewRecordReader(schema, []arrow.Record{batch})
+	return array.NewRecordReader(schema, []arrow.RecordBatch{batch})
 }
 
 // buildSchema converts Athena ColumnInfo slice to an Arrow schema.
@@ -101,8 +101,8 @@ func athenaTypeStringToArrow(t string) arrow.DataType {
 	}
 }
 
-// buildRecordBatch converts Athena rows into a single Arrow Record.
-func buildRecordBatch(alloc memory.Allocator, schema *arrow.Schema, colInfo []types.ColumnInfo, rows []types.Row) (arrow.Record, error) {
+// buildRecordBatch converts Athena rows into a single Arrow RecordBatch.
+func buildRecordBatch(alloc memory.Allocator, schema *arrow.Schema, colInfo []types.ColumnInfo, rows []types.Row) (arrow.RecordBatch, error) {
 	bldr := array.NewRecordBuilder(alloc, schema)
 	defer bldr.Release()
 

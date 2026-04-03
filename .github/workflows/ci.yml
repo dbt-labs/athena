@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+permissions:
+  contents: read
+
+jobs:
+  # ──────────────────────────────────────────────────────────────────────────
+  # Unit and functional tests — no AWS credentials required.
+  # ──────────────────────────────────────────────────────────────────────────
+  test:
+    name: Unit & Functional Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+
+      - name: Run tests (with race detector)
+        working-directory: go
+        run: go test -race -count=1 ./...
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Integration tests — require real AWS credentials and Athena resources.
+  # Runs only on pushes to main, not on PRs, to keep credentials out of
+  # fork-originated workflows.
+  #
+  # Required secrets:
+  #   AWS_ACCESS_KEY_ID       — IAM key with Athena + S3 permissions
+  #   AWS_SECRET_ACCESS_KEY   — corresponding secret
+  #   AWS_REGION              — e.g. us-east-1
+  #   ATHENA_S3_STAGING_DIR   — e.g. s3://my-bucket/athena-results/
+  # ──────────────────────────────────────────────────────────────────────────
+  integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Run integration tests (with race detector)
+        working-directory: go
+        env:
+          ADBC_ATHENA_TESTS: "1"
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
+          ATHENA_S3_STAGING_DIR: ${{ secrets.ATHENA_S3_STAGING_DIR }}
+        run: go test -race -count=1 -run TestIntegration ./...
