@@ -42,7 +42,7 @@ func newRecordReader(alloc memory.Allocator, colInfo []types.ColumnInfo, rows []
 	}
 	defer batch.Release()
 
-	return array.NewRecordReader(schema, []arrow.RecordBatch{batch})
+	return array.NewRecordReader(schema, []arrow.Record{batch})
 }
 
 // buildSchema converts Athena ColumnInfo slice to an Arrow schema.
@@ -101,8 +101,8 @@ func athenaTypeStringToArrow(t string) arrow.DataType {
 	}
 }
 
-// buildRecordBatch converts Athena rows into a single Arrow RecordBatch.
-func buildRecordBatch(alloc memory.Allocator, schema *arrow.Schema, colInfo []types.ColumnInfo, rows []types.Row) (arrow.RecordBatch, error) {
+// buildRecordBatch converts Athena rows into a single Arrow Record.
+func buildRecordBatch(alloc memory.Allocator, schema *arrow.Schema, colInfo []types.ColumnInfo, rows []types.Row) (arrow.Record, error) {
 	bldr := array.NewRecordBuilder(alloc, schema)
 	defer bldr.Release()
 
@@ -242,7 +242,10 @@ func civilToDays(y, m, d int) int32 {
 }
 
 // parseTimestampToMicros parses an Athena timestamp string to microseconds since Unix epoch.
-// Athena timestamps use the format "YYYY-MM-DD HH:MM:SS.ffffff" (fractional part optional).
+// Athena timestamps use the format "YYYY-MM-DD HH:MM:SS[.ffffff][ <tz>]".
+// Timezone suffixes (e.g., " UTC", " America/New_York", "+00:00") are ignored — all
+// timestamps are treated as UTC, consistent with Athena's behaviour for TIMESTAMP
+// (which has no timezone) and TIMESTAMP WITH TIME ZONE (which Athena normalises to UTC).
 func parseTimestampToMicros(s string) (int64, error) {
 	if len(s) < 19 {
 		return 0, fmt.Errorf("unexpected timestamp format: %q", s)
@@ -273,9 +276,17 @@ func parseTimestampToMicros(s string) (int64, error) {
 	}
 
 	var fracMicros int64
-	if len(s) > 20 {
+	if len(s) > 19 && s[19] == '.' {
+		// Fractional seconds start at position 20.
 		frac := s[20:]
-		// pad or truncate to 6 digits
+		// Truncate at any non-digit (e.g. space before timezone suffix).
+		for i := 0; i < len(frac); i++ {
+			if frac[i] < '0' || frac[i] > '9' {
+				frac = frac[:i]
+				break
+			}
+		}
+		// Pad or truncate to exactly 6 digits (microseconds).
 		for len(frac) < 6 {
 			frac += "0"
 		}
@@ -287,6 +298,8 @@ func parseTimestampToMicros(s string) (int64, error) {
 			return 0, err
 		}
 	}
+	// Any trailing timezone data after position 19 (or after the fractional part)
+	// is intentionally ignored.
 
 	days := civilToDays(year, month, day)
 	totalMicros := int64(days)*86400*1_000_000 +

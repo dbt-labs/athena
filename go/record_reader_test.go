@@ -171,4 +171,24 @@ func TestParseTimestampToMicros(t *testing.T) {
 	us, err = parseTimestampToMicros("1970-01-01 00:00:00.5")
 	require.NoError(t, err)
 	assert.Equal(t, int64(500_000), us)
+
+	// With 6-digit microseconds
+	us, err = parseTimestampToMicros("1970-01-01 00:00:00.123456")
+	require.NoError(t, err)
+	assert.Equal(t, int64(123_456), us)
+
+	// Timestamp with time zone — " UTC" suffix must be ignored
+	us, err = parseTimestampToMicros("1970-01-01 00:00:01.000000 UTC")
+	require.NoError(t, err)
+	assert.Equal(t, int64(1_000_000), us)
+
+	// Timestamp with time zone — no fractional seconds, space+tz suffix
+	us, err = parseTimestampToMicros("1970-01-01 00:00:01 UTC")
+	require.NoError(t, err)
+	assert.Equal(t, int64(1_000_000), us)
+
+	// Timestamp with numeric offset suffix
+	us, err = parseTimestampToMicros("1970-01-01 00:00:00.000000 America/New_York")
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), us)
 }

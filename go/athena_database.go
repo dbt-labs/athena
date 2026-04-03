@@ -57,6 +57,8 @@ func (d *databaseImpl) Open(ctx context.Context) (adbc.Connection, error) {
 		ConnectionImplBase: driverbase.NewConnectionImplBase(&d.DatabaseImplBase),
 		athenaClient:       client,
 		db:                 d,
+		catalog:            d.catalog,
+		schema:             d.schema,
 	}
 
 	return driverbase.NewConnectionBuilder(conn).
