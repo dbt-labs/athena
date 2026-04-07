@@ -217,7 +217,10 @@ func (s *statementImpl) waitForQuery(ctx context.Context, execID *string) error 
 }
 
 // buildPagedRecordReader fetches Athena results page-by-page and builds one
-// Arrow record batch per page, limiting peak in-memory row storage.
+// Arrow record batch per page. All batches are accumulated before the
+// RecordReader is returned; the caller receives an array.RecordReader that
+// iterates over them one at a time. Memory usage scales with total result size
+// since all pages must be fetched before returning.
 func (s *statementImpl) buildPagedRecordReader(ctx context.Context, execID *string) (array.RecordReader, error) {
 	input := &athenaSDK.GetQueryResultsInput{
 		QueryExecutionId: execID,

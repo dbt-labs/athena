@@ -43,15 +43,23 @@ type databaseImpl struct {
 	secretKey    string
 	sessionToken string
 	profileName  string
+
+	// testClient is non-nil only during testing. When set, Open uses it
+	// directly instead of constructing a real AWS SDK client.
+	testClient athenaClientAPI
 }
 
 func (d *databaseImpl) Open(ctx context.Context) (adbc.Connection, error) {
-	cfg, err := d.buildAWSConfig(ctx)
-	if err != nil {
-		return nil, err
+	var client athenaClientAPI
+	if d.testClient != nil {
+		client = d.testClient
+	} else {
+		cfg, err := d.buildAWSConfig(ctx)
+		if err != nil {
+			return nil, err
+		}
+		client = athenaSDK.NewFromConfig(cfg)
 	}
-
-	client := athenaSDK.NewFromConfig(cfg)
 
 	conn := &connectionImpl{
 		ConnectionImplBase: driverbase.NewConnectionImplBase(&d.DatabaseImplBase),

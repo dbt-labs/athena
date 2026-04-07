@@ -38,9 +38,11 @@ import (
 
 // mockAthenaClient implements athenaClientAPI using per-method function fields.
 // Any field left nil will panic if that method is called, surfacing unexpected
-// calls immediately.
+// calls immediately — except StopQueryExecution which is best-effort and
+// returns a no-op if the function is not set.
 type mockAthenaClient struct {
 	startQueryExecutionFn func(ctx context.Context, params *athenaSDK.StartQueryExecutionInput, optFns ...func(*athenaSDK.Options)) (*athenaSDK.StartQueryExecutionOutput, error)
+	stopQueryExecutionFn  func(ctx context.Context, params *athenaSDK.StopQueryExecutionInput, optFns ...func(*athenaSDK.Options)) (*athenaSDK.StopQueryExecutionOutput, error)
 	getQueryExecutionFn   func(ctx context.Context, params *athenaSDK.GetQueryExecutionInput, optFns ...func(*athenaSDK.Options)) (*athenaSDK.GetQueryExecutionOutput, error)
 	getQueryResultsFn     func(ctx context.Context, params *athenaSDK.GetQueryResultsInput, optFns ...func(*athenaSDK.Options)) (*athenaSDK.GetQueryResultsOutput, error)
 	getTableMetadataFn    func(ctx context.Context, params *athenaSDK.GetTableMetadataInput, optFns ...func(*athenaSDK.Options)) (*athenaSDK.GetTableMetadataOutput, error)
@@ -51,6 +53,12 @@ type mockAthenaClient struct {
 
 func (m *mockAthenaClient) StartQueryExecution(ctx context.Context, params *athenaSDK.StartQueryExecutionInput, optFns ...func(*athenaSDK.Options)) (*athenaSDK.StartQueryExecutionOutput, error) {
 	return m.startQueryExecutionFn(ctx, params, optFns...)
+}
+func (m *mockAthenaClient) StopQueryExecution(ctx context.Context, params *athenaSDK.StopQueryExecutionInput, optFns ...func(*athenaSDK.Options)) (*athenaSDK.StopQueryExecutionOutput, error) {
+	if m.stopQueryExecutionFn != nil {
+		return m.stopQueryExecutionFn(ctx, params, optFns...)
+	}
+	return &athenaSDK.StopQueryExecutionOutput{}, nil
 }
 func (m *mockAthenaClient) GetQueryExecution(ctx context.Context, params *athenaSDK.GetQueryExecutionInput, optFns ...func(*athenaSDK.Options)) (*athenaSDK.GetQueryExecutionOutput, error) {
 	return m.getQueryExecutionFn(ctx, params, optFns...)
@@ -103,6 +111,8 @@ func newTestConn(mock athenaClientAPI) *connectionImpl {
 		ConnectionImplBase: driverbase.NewConnectionImplBase(&db.DatabaseImplBase),
 		athenaClient:       mock,
 		db:                 db,
+		catalog:            db.catalog,
+		schema:             db.schema,
 	}
 }
 
@@ -343,11 +353,17 @@ func TestFunctional_MultiPageResults(t *testing.T) {
 	require.NoError(t, err)
 	defer rdr.Release()
 
-	require.True(t, rdr.Next())
-	rec := rdr.Record()
-	// fetchResults accumulates all pages into one batch → 4 data rows.
-	assert.EqualValues(t, 4, rec.NumRows())
-	assert.EqualValues(t, 1, rec.NumCols())
+	var totalRows int64
+	var batchCount int
+	for rdr.Next() {
+		rec := rdr.Record()
+		totalRows += rec.NumRows()
+		assert.EqualValues(t, 1, rec.NumCols())
+		batchCount++
+	}
+
+	assert.Greater(t, batchCount, 0)
+	assert.EqualValues(t, 4, totalRows)
 }
 
 // TestFunctional_GetTableSchema verifies GetTableSchema calls GetTableMetadata
@@ -397,7 +413,7 @@ func TestFunctional_ListCatalogs(t *testing.T) {
 	}
 
 	conn := newTestConn(mock)
-	conn.db.catalog = "" // force the paginator path rather than the shortcut
+	conn.catalog = "" // force the paginator path rather than the shortcut
 
 	catalogs, err := conn.GetCatalogs(context.Background(), nil)
 	require.NoError(t, err)
