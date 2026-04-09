@@ -171,7 +171,10 @@ func (s *statementImpl) waitForQuery(ctx context.Context, execID *string) error 
 		select {
 		case <-ctx.Done():
 			// Best-effort: stop the running Athena query to avoid unnecessary cost.
-			_, _ = s.conn.athenaClient.StopQueryExecution(context.Background(), &athenaSDK.StopQueryExecutionInput{
+			// Use a short timeout so a network stall doesn't block indefinitely.
+			stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer stopCancel()
+			_, _ = s.conn.athenaClient.StopQueryExecution(stopCtx, &athenaSDK.StopQueryExecutionInput{
 				QueryExecutionId: execID,
 			})
 			return adbc.Error{

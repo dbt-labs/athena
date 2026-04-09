@@ -42,7 +42,7 @@ func newRecordReader(alloc memory.Allocator, colInfo []types.ColumnInfo, rows []
 	}
 	defer batch.Release()
 
-	return array.NewRecordReader(schema, []arrow.RecordBatch{batch})
+	return array.NewRecordReader(schema, []arrow.Record{batch})
 }
 
 // buildSchema converts Athena ColumnInfo slice to an Arrow schema.
@@ -101,22 +101,25 @@ func athenaTypeStringToArrow(t string) arrow.DataType {
 	}
 }
 
-// buildRecordBatch converts Athena rows into a single Arrow RecordBatch.
-func buildRecordBatch(alloc memory.Allocator, schema *arrow.Schema, colInfo []types.ColumnInfo, rows []types.Row) (arrow.RecordBatch, error) {
+// buildRecordBatch converts Athena rows into a single Arrow Record.
+func buildRecordBatch(alloc memory.Allocator, schema *arrow.Schema, colInfo []types.ColumnInfo, rows []types.Row) (arrow.Record, error) {
 	bldr := array.NewRecordBuilder(alloc, schema)
 	defer bldr.Release()
 
 	for _, row := range rows {
-		for ci, field := range row.Data {
-			if ci >= len(colInfo) {
-				break
+		for ci := range colInfo {
+			fb := bldr.Field(ci)
+			if ci >= len(row.Data) {
+				// Athena returned fewer fields than the schema declares — pad with null.
+				fb.AppendNull()
+				continue
 			}
+			field := row.Data[ci]
 			val := ""
 			isNull := field.VarCharValue == nil
 			if !isNull {
 				val = *field.VarCharValue
 			}
-			fb := bldr.Field(ci)
 			if err := appendValue(fb, colInfo[ci], val, isNull); err != nil {
 				return nil, fmt.Errorf("column %d (%s): %w", ci, schema.Field(ci).Name, err)
 			}
