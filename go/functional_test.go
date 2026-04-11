@@ -89,10 +89,12 @@ func strp(s string) *string { return &s }
 
 // newTestDB builds a databaseImpl with the given mock client and sensible
 // defaults. No AWS credentials are needed.
-func newTestDB(mock athenaClientAPI) *databaseImpl {
+func newTestDB(t testing.TB, mock athenaClientAPI) *databaseImpl {
+	t.Helper()
 	info := driverbase.DefaultDriverInfo("Athena")
 	driverBase := driverbase.NewDriverImplBase(info, memory.DefaultAllocator)
-	dbBase, _ := driverbase.NewDatabaseImplBase(context.Background(), &driverBase)
+	dbBase, err := driverbase.NewDatabaseImplBase(context.Background(), &driverBase)
+	require.NoError(t, err)
 	return &databaseImpl{
 		DatabaseImplBase: dbBase,
 		catalog:          "AwsDataCatalog",
@@ -105,8 +107,8 @@ func newTestDB(mock athenaClientAPI) *databaseImpl {
 
 // newTestConn builds a connectionImpl directly with the mock client, bypassing
 // driverbase.Open and AWS credential resolution entirely.
-func newTestConn(mock athenaClientAPI) *connectionImpl {
-	db := newTestDB(mock)
+func newTestConn(t testing.TB, mock athenaClientAPI) *connectionImpl {
+	db := newTestDB(t, mock)
 	return &connectionImpl{
 		ConnectionImplBase: driverbase.NewConnectionImplBase(&db.DatabaseImplBase),
 		athenaClient:       mock,
@@ -117,8 +119,8 @@ func newTestConn(mock athenaClientAPI) *connectionImpl {
 }
 
 // newTestStmt creates a statementImpl attached to a test connection.
-func newTestStmt(mock athenaClientAPI) *statementImpl {
-	conn := newTestConn(mock)
+func newTestStmt(t testing.TB, mock athenaClientAPI) *statementImpl {
+	conn := newTestConn(t, mock)
 	return &statementImpl{
 		StatementImplBase: driverbase.NewStatementImplBase(&conn.ConnectionImplBase, conn.ErrorHelper),
 		conn:              conn,
@@ -187,7 +189,7 @@ func TestFunctional_SimpleSelectQuery(t *testing.T) {
 		getQueryResultsFn:   singlePageResults("n", []string{"42"}),
 	}
 
-	stmt := newTestStmt(mock)
+	stmt := newTestStmt(t, mock)
 	require.NoError(t, stmt.SetSqlQuery("SELECT 42 AS n"))
 
 	rdr, rowCount, err := stmt.ExecuteQuery(context.Background())
@@ -225,7 +227,7 @@ func TestFunctional_QueryFailure(t *testing.T) {
 		},
 	}
 
-	stmt := newTestStmt(mock)
+	stmt := newTestStmt(t, mock)
 	require.NoError(t, stmt.SetSqlQuery("SELECT * FROM nonexistent_table"))
 
 	_, _, err := stmt.ExecuteQuery(context.Background())
@@ -255,7 +257,7 @@ func TestFunctional_QueryCancelled(t *testing.T) {
 		},
 	}
 
-	stmt := newTestStmt(mock)
+	stmt := newTestStmt(t, mock)
 	require.NoError(t, stmt.SetSqlQuery("SELECT 1"))
 
 	_, _, err := stmt.ExecuteQuery(context.Background())
@@ -290,7 +292,7 @@ func TestFunctional_ContextCancellationMidPoll(t *testing.T) {
 		},
 	}
 
-	stmt := newTestStmt(mock)
+	stmt := newTestStmt(t, mock)
 	require.NoError(t, stmt.SetSqlQuery("SELECT sleep(60)"))
 
 	_, _, err := stmt.ExecuteQuery(ctx)
@@ -346,7 +348,7 @@ func TestFunctional_MultiPageResults(t *testing.T) {
 		},
 	}
 
-	stmt := newTestStmt(mock)
+	stmt := newTestStmt(t, mock)
 	require.NoError(t, stmt.SetSqlQuery("SELECT id FROM t"))
 
 	rdr, _, err := stmt.ExecuteQuery(context.Background())
@@ -387,7 +389,7 @@ func TestFunctional_GetTableSchema(t *testing.T) {
 		},
 	}
 
-	conn := newTestConn(mock)
+	conn := newTestConn(t, mock)
 	dbSchema := "mydb"
 	schema, err := conn.GetTableSchema(context.Background(), nil, &dbSchema, "mytable")
 	require.NoError(t, err)
@@ -412,7 +414,7 @@ func TestFunctional_ListCatalogs(t *testing.T) {
 		},
 	}
 
-	conn := newTestConn(mock)
+	conn := newTestConn(t, mock)
 	conn.catalog = "" // force the paginator path rather than the shortcut
 
 	catalogs, err := conn.GetCatalogs(context.Background(), nil)
@@ -434,7 +436,7 @@ func TestFunctional_ListSchemas(t *testing.T) {
 		},
 	}
 
-	conn := newTestConn(mock)
+	conn := newTestConn(t, mock)
 	schemas, err := conn.GetDBSchemasForCatalog(context.Background(), "AwsDataCatalog", nil)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"default", "analytics"}, schemas)

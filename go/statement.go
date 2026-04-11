@@ -283,9 +283,17 @@ func (s *statementImpl) buildPagedRecordReader(ctx context.Context, execID *stri
 		schema = arrow.NewSchema(nil, nil)
 	}
 
-	// Note: do NOT release batches here; array.NewRecordReader retains them and
-	// the caller is responsible for calling Release() on the returned RecordReader.
-	return array.NewRecordReader(schema, batches)
+	// array.NewRecordReader retains its own reference to each record, so release
+	// the local references here. The caller is responsible for calling Release()
+	// on the returned RecordReader.
+	rr, err := array.NewRecordReader(schema, batches)
+	for _, b := range batches {
+		b.Release()
+	}
+	if err != nil {
+		return nil, err
+	}
+	return rr, nil
 }
 
 func (s *statementImpl) Bind(_ context.Context, _ arrow.Record) error {
