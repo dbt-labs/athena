@@ -187,7 +187,7 @@ func TestParseTimestampToMicros(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(1_000_000), us)
 
-	// Timestamp with numeric offset suffix
+	// Timestamp with IANA time zone name suffix
 	us, err = parseTimestampToMicros("1970-01-01 00:00:00.000000 America/New_York")
 	require.NoError(t, err)
 	assert.Equal(t, int64(0), us)
