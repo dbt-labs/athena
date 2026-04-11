@@ -302,7 +302,7 @@ func TestFunctional_ContextCancellationMidPoll(t *testing.T) {
 }
 
 // TestFunctional_MultiPageResults verifies that multi-page pagination is
-// correctly assembled into a single result batch.
+// read correctly across multiple result batches and returns all rows.
 func TestFunctional_MultiPageResults(t *testing.T) {
 	const execID = "exec-multi"
 	var callCount int32
