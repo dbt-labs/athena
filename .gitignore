@@ -1,0 +1,28 @@
+# Go build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+# Compiled Go binaries produced by `go build` (no extension on Linux/macOS)
+/go/check_*
+/go/athena
+
+# Go module cache
+vendor/
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Coverage output
+coverage.out
+coverage.html
