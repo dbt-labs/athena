@@ -430,7 +430,7 @@ AdbcStatusCode AdbcStatementSetOptionInt(struct AdbcStatement* statement,
 }
 
 /* Do not export the common AdbcDriverInit entrypoint from this driver. */
-#endif  // ADBC_NO_COMMON_ENTRYPOINTS
+#endif  // !defined(ADBC_NO_COMMON_ENTRYPOINTS)
 
 int AthenaArrayStreamGetSchema(struct ArrowArrayStream*, struct ArrowSchema*);
 int AthenaArrayStreamGetNext(struct ArrowArrayStream*, struct ArrowArray*);

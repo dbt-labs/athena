@@ -102,10 +102,12 @@ make clean
 
 ### Exported symbols
 
-The library exports two C entrypoints:
-- **`AdbcDriverAthenaInit`** — the primary Athena-specific entrypoint
-- **`AdbcDriverInit`** — generic alias in `utils.c` (`!ADBC_NO_COMMON_ENTRYPOINTS`),
-  delegates to `AdbcDriverAthenaInit`
+The library exports a single driver-init entrypoint:
+- **`AdbcDriverAthenaInit`** — the Athena-specific entrypoint
+
+`utils.c` has a `#if !defined(ADBC_NO_COMMON_ENTRYPOINTS)` block that exports generic
+wrappers (e.g. `AdbcErrorGetDetailCount`), but deliberately does **not** include a
+generic `AdbcDriverInit` alias — see the comment at the bottom of that block.
 
 ### Testing
 
