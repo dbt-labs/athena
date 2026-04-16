@@ -18,9 +18,9 @@ all: libadbc_driver_athena.$(SUFFIX)
 test: libadbc_driver_athena.$(SUFFIX)
 	cd .. && go test -tags driverlib -v ./pkg/athena/
 ifeq ($(shell go env GOOS),linux)
-	LD_LIBRARY_PATH=. go run ./shimtest/
+	LD_LIBRARY_PATH=. go run ./shimtest/main.go
 else ifeq ($(shell go env GOOS),darwin)
-	DYLD_LIBRARY_PATH=. go run ./shimtest/
+	DYLD_LIBRARY_PATH=. go run ./shimtest/main.go
 endif
 
 SRCS := $(wildcard athena/*.go athena/*.c athena/*.h)
