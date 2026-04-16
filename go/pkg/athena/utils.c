@@ -15,8 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-// clang-format off
 //go:build driverlib
+
+// clang-format off
 
 // clang-format on
 
@@ -428,10 +429,7 @@ AdbcStatusCode AdbcStatementSetOptionInt(struct AdbcStatement* statement,
   return AthenaStatementSetOptionInt(statement, key, value, error);
 }
 
-ADBC_EXPORT
-AdbcStatusCode AdbcDriverInit(int version, void* driver, struct AdbcError* error) {
-  return AdbcDriverAthenaInit(version, driver, error);
-}
+/* Do not export the common AdbcDriverInit entrypoint from this driver. */
 #endif  // ADBC_NO_COMMON_ENTRYPOINTS
 
 int AthenaArrayStreamGetSchema(struct ArrowArrayStream*, struct ArrowSchema*);
