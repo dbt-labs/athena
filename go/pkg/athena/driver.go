@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//go:build driverlib
+// This file must remain available to default, untagged builds so
+// `go test ./...` does not fail package traversal with all Go files
+// excluded by build constraints.
 
 package main
 
@@ -1581,6 +1583,7 @@ func AthenaStatementBind(stmt *C.struct_AdbcStatement, values *C.struct_ArrowArr
 		// if there was an error, we need to manually release both inputs
 		cdata.ReleaseCArrowArray(toCdataArray(values))
 		cdata.ReleaseCArrowSchema(toCdataSchema(schema))
+		cdata.ReleaseCArrowSchema(toCdataSchema(schema))
 		return C.AdbcStatusCode(errToAdbcErr(err, e))
 	}
 	defer rec.Release()
@@ -1782,6 +1785,10 @@ func AthenaStatementExecutePartitions(stmt *C.struct_AdbcStatement, schema *C.st
 
 //export AdbcDriverAthenaInit
 func AdbcDriverAthenaInit(version C.int, rawDriver *C.void, err *C.struct_AdbcError) C.AdbcStatusCode {
+	if rawDriver == nil {
+		setErr(err, "AdbcDriverAthenaInit: driver output struct is null")
+		return C.ADBC_STATUS_INVALID_ARGUMENT
+	}
 	if rawDriver == nil {
 		setErr(err, "AdbcDriverAthenaInit: driver output struct is null")
 		return C.ADBC_STATUS_INVALID_ARGUMENT
