@@ -442,6 +442,10 @@ func AthenaDatabaseGetOptionDouble(db *C.struct_AdbcDatabase, key *C.cchar_t, va
 		return C.ADBC_STATUS_NOT_IMPLEMENTED
 	}
 
+	if value == nil {
+		setErr(err, "AdbcDatabaseGetOptionDouble: value is nil")
+		return C.ADBC_STATUS_INVALID_ARGUMENT
+	}
 	val, e := opts.GetOptionDouble(C.GoString(key))
 	*value = C.double(val)
 	return C.AdbcStatusCode(errToAdbcErr(err, e))
@@ -465,6 +469,10 @@ func AthenaDatabaseGetOptionInt(db *C.struct_AdbcDatabase, key *C.cchar_t, value
 		return C.ADBC_STATUS_NOT_IMPLEMENTED
 	}
 
+	if value == nil {
+		setErr(err, "AdbcDatabaseGetOptionInt: value is nil")
+		return C.ADBC_STATUS_INVALID_ARGUMENT
+	}
 	val, e := opts.GetOptionInt(C.GoString(key))
 	*value = C.int64_t(val)
 	return C.AdbcStatusCode(errToAdbcErr(err, e))
@@ -744,6 +752,10 @@ func AthenaConnectionGetOptionDouble(db *C.struct_AdbcConnection, key *C.cchar_t
 		return C.ADBC_STATUS_NOT_IMPLEMENTED
 	}
 
+	if value == nil {
+		setErr(err, "AdbcConnectionGetOptionDouble: value is nil")
+		return C.ADBC_STATUS_INVALID_ARGUMENT
+	}
 	val, e := opts.GetOptionDouble(C.GoString(key))
 	*value = C.double(val)
 	return C.AdbcStatusCode(errToAdbcErr(err, e))
@@ -767,6 +779,10 @@ func AthenaConnectionGetOptionInt(db *C.struct_AdbcConnection, key *C.cchar_t, v
 		return C.ADBC_STATUS_NOT_IMPLEMENTED
 	}
 
+	if value == nil {
+		setErr(err, "AdbcConnectionGetOptionInt: value is nil")
+		return C.ADBC_STATUS_INVALID_ARGUMENT
+	}
 	val, e := opts.GetOptionInt(C.GoString(key))
 	*value = C.int64_t(val)
 	return C.AdbcStatusCode(errToAdbcErr(err, e))
@@ -1341,6 +1357,10 @@ func AthenaStatementGetOptionDouble(db *C.struct_AdbcStatement, key *C.cchar_t, 
 		return C.ADBC_STATUS_NOT_IMPLEMENTED
 	}
 
+	if value == nil {
+		setErr(err, "AdbcStatementGetOptionDouble: value is nil")
+		return C.ADBC_STATUS_INVALID_ARGUMENT
+	}
 	val, e := opts.GetOptionDouble(C.GoString(key))
 	*value = C.double(val)
 	return C.AdbcStatusCode(errToAdbcErr(err, e))
@@ -1364,6 +1384,10 @@ func AthenaStatementGetOptionInt(db *C.struct_AdbcStatement, key *C.cchar_t, val
 		return C.ADBC_STATUS_NOT_IMPLEMENTED
 	}
 
+	if value == nil {
+		setErr(err, "AdbcStatementGetOptionInt: value is nil")
+		return C.ADBC_STATUS_INVALID_ARGUMENT
+	}
 	val, e := opts.GetOptionInt(C.GoString(key))
 	*value = C.int64_t(val)
 	return C.AdbcStatusCode(errToAdbcErr(err, e))
