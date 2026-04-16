@@ -28,3 +28,5 @@ Thumbs.db
 # Coverage output
 coverage.out
 coverage.html
+
+*.env

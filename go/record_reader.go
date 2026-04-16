@@ -36,7 +36,7 @@ func newRecordReader(alloc memory.Allocator, colInfo []types.ColumnInfo, rows []
 		return array.NewRecordReader(schema, nil)
 	}
 
-	batch, err := buildRecordBatch(alloc, schema, colInfo, rows)
+	batch, err := buildRecordBatch(alloc, schema, rows)
 	if err != nil {
 		return nil, err
 	}
@@ -102,12 +102,14 @@ func athenaTypeStringToArrow(t string) arrow.DataType {
 }
 
 // buildRecordBatch converts Athena rows into a single Arrow Record.
-func buildRecordBatch(alloc memory.Allocator, schema *arrow.Schema, colInfo []types.ColumnInfo, rows []types.Row) (arrow.Record, error) {
+// Column types are derived from the Arrow schema rather than re-inspecting the
+// raw Athena type strings, keeping the type mapping logic in one place.
+func buildRecordBatch(alloc memory.Allocator, schema *arrow.Schema, rows []types.Row) (arrow.Record, error) {
 	bldr := array.NewRecordBuilder(alloc, schema)
 	defer bldr.Release()
 
 	for _, row := range rows {
-		for ci := range colInfo {
+		for ci := 0; ci < schema.NumFields(); ci++ {
 			fb := bldr.Field(ci)
 			if ci >= len(row.Data) {
 				// Athena returned fewer fields than the schema declares — pad with null.
@@ -120,7 +122,7 @@ func buildRecordBatch(alloc memory.Allocator, schema *arrow.Schema, colInfo []ty
 			if !isNull {
 				val = *field.VarCharValue
 			}
-			if err := appendValue(fb, colInfo[ci], val, isNull); err != nil {
+			if err := appendValue(fb, schema.Field(ci).Type, val, isNull); err != nil {
 				return nil, fmt.Errorf("column %d (%s): %w", ci, schema.Field(ci).Name, err)
 			}
 		}
@@ -129,77 +131,73 @@ func buildRecordBatch(alloc memory.Allocator, schema *arrow.Schema, colInfo []ty
 	return bldr.NewRecord(), nil
 }
 
-// appendValue appends a string-encoded value to the appropriate builder type.
-func appendValue(bldr array.Builder, col types.ColumnInfo, val string, isNull bool) error {
+// appendValue appends a string-encoded value to the appropriate builder type,
+// switching on the Arrow DataType rather than the original Athena type string.
+func appendValue(bldr array.Builder, dt arrow.DataType, val string, isNull bool) error {
 	if isNull {
 		bldr.AppendNull()
 		return nil
 	}
 
-	colType := ""
-	if col.Type != nil {
-		colType = *col.Type
-	}
-
-	switch colType {
-	case "bigint":
+	switch dt.ID() {
+	case arrow.INT64:
 		v, err := strconv.ParseInt(val, 10, 64)
 		if err != nil {
 			return err
 		}
 		bldr.(*array.Int64Builder).Append(v)
-	case "integer", "int":
+	case arrow.INT32:
 		v, err := strconv.ParseInt(val, 10, 32)
 		if err != nil {
 			return err
 		}
 		bldr.(*array.Int32Builder).Append(int32(v))
-	case "smallint":
+	case arrow.INT16:
 		v, err := strconv.ParseInt(val, 10, 16)
 		if err != nil {
 			return err
 		}
 		bldr.(*array.Int16Builder).Append(int16(v))
-	case "tinyint":
+	case arrow.INT8:
 		v, err := strconv.ParseInt(val, 10, 8)
 		if err != nil {
 			return err
 		}
 		bldr.(*array.Int8Builder).Append(int8(v))
-	case "double":
+	case arrow.FLOAT64:
 		v, err := strconv.ParseFloat(val, 64)
 		if err != nil {
 			return err
 		}
 		bldr.(*array.Float64Builder).Append(v)
-	case "float", "real":
+	case arrow.FLOAT32:
 		v, err := strconv.ParseFloat(val, 32)
 		if err != nil {
 			return err
 		}
 		bldr.(*array.Float32Builder).Append(float32(v))
-	case "boolean":
+	case arrow.BOOL:
 		v, err := strconv.ParseBool(val)
 		if err != nil {
 			return err
 		}
 		bldr.(*array.BooleanBuilder).Append(v)
-	case "date":
+	case arrow.DATE32:
 		days, err := parseDateToDays(val)
 		if err != nil {
 			return err
 		}
 		bldr.(*array.Date32Builder).Append(arrow.Date32(days))
-	case "timestamp", "timestamp with time zone":
+	case arrow.TIMESTAMP:
 		us, err := parseTimestampToMicros(val)
 		if err != nil {
 			return err
 		}
 		bldr.(*array.TimestampBuilder).Append(arrow.Timestamp(us))
-	case "varbinary", "binary":
+	case arrow.BINARY:
 		bldr.(*array.BinaryBuilder).Append([]byte(val))
 	default:
-		// varchar, string, char, array, map, row, decimal, json, etc.
+		// STRING covers varchar, string, char, decimal, array, map, row, json, etc.
 		bldr.(*array.StringBuilder).Append(val)
 	}
 	return nil

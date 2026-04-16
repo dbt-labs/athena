@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/memory"
 	"github.com/aws/aws-sdk-go-v2/service/athena/types"
 	"github.com/stretchr/testify/assert"
@@ -191,4 +192,196 @@ func TestParseTimestampToMicros(t *testing.T) {
 	us, err = parseTimestampToMicros("1970-01-01 00:00:00.000000 America/New_York")
 	require.NoError(t, err)
 	assert.Equal(t, int64(0), us)
+}
+
+// TestBuildRecordBatch_AllTypes exercises appendValue for every Athena type
+// through buildRecordBatch, verifying both the Arrow column type and the
+// decoded value.
+func TestBuildRecordBatch_AllTypes(t *testing.T) {
+	tests := []struct {
+		athenaType string
+		val        string
+		check      func(t *testing.T, col arrow.Array)
+	}{
+		{
+			"bigint",
+			"9223372036854775807",
+			func(t *testing.T, col arrow.Array) {
+				require.Equal(t, arrow.PrimitiveTypes.Int64, col.DataType())
+				assert.EqualValues(t, int64(9223372036854775807), col.(*array.Int64).Value(0))
+			},
+		},
+		{
+			"varchar",
+			"hello",
+			func(t *testing.T, col arrow.Array) {
+				require.Equal(t, arrow.BinaryTypes.String, col.DataType())
+				assert.Equal(t, "hello", col.(*array.String).Value(0))
+			},
+		},
+		{
+			"integer",
+			"123",
+			func(t *testing.T, col arrow.Array) {
+				require.Equal(t, arrow.PrimitiveTypes.Int32, col.DataType())
+				assert.EqualValues(t, 123, col.(*array.Int32).Value(0))
+			},
+		},
+		{
+			"int",
+			"-1",
+			func(t *testing.T, col arrow.Array) {
+				require.Equal(t, arrow.PrimitiveTypes.Int32, col.DataType())
+				assert.EqualValues(t, -1, col.(*array.Int32).Value(0))
+			},
+		},
+		{
+			"smallint",
+			"32767",
+			func(t *testing.T, col arrow.Array) {
+				require.Equal(t, arrow.PrimitiveTypes.Int16, col.DataType())
+				assert.EqualValues(t, 32767, col.(*array.Int16).Value(0))
+			},
+		},
+		{
+			"tinyint",
+			"127",
+			func(t *testing.T, col arrow.Array) {
+				require.Equal(t, arrow.PrimitiveTypes.Int8, col.DataType())
+				assert.EqualValues(t, 127, col.(*array.Int8).Value(0))
+			},
+		},
+		{
+			"double",
+			"3.14",
+			func(t *testing.T, col arrow.Array) {
+				require.Equal(t, arrow.PrimitiveTypes.Float64, col.DataType())
+				assert.InDelta(t, 3.14, col.(*array.Float64).Value(0), 1e-9)
+			},
+		},
+		{
+			"float",
+			"2.5",
+			func(t *testing.T, col arrow.Array) {
+				require.Equal(t, arrow.PrimitiveTypes.Float32, col.DataType())
+				assert.InDelta(t, 2.5, col.(*array.Float32).Value(0), 1e-6)
+			},
+		},
+		{
+			"real",
+			"1.0",
+			func(t *testing.T, col arrow.Array) {
+				require.Equal(t, arrow.PrimitiveTypes.Float32, col.DataType())
+				assert.InDelta(t, 1.0, col.(*array.Float32).Value(0), 1e-6)
+			},
+		},
+		{
+			"boolean",
+			"true",
+			func(t *testing.T, col arrow.Array) {
+				require.Equal(t, arrow.FixedWidthTypes.Boolean, col.DataType())
+				assert.True(t, col.(*array.Boolean).Value(0))
+			},
+		},
+		{
+			"date",
+			"1970-01-01",
+			func(t *testing.T, col arrow.Array) {
+				require.Equal(t, arrow.FixedWidthTypes.Date32, col.DataType())
+				assert.EqualValues(t, 0, col.(*array.Date32).Value(0))
+			},
+		},
+		{
+			"date",
+			"2000-01-01",
+			func(t *testing.T, col arrow.Array) {
+				require.Equal(t, arrow.FixedWidthTypes.Date32, col.DataType())
+				assert.EqualValues(t, 10957, col.(*array.Date32).Value(0))
+			},
+		},
+		{
+			"timestamp",
+			"1970-01-01 00:00:01.000000",
+			func(t *testing.T, col arrow.Array) {
+				require.Equal(t, arrow.FixedWidthTypes.Timestamp_us, col.DataType())
+				assert.EqualValues(t, 1_000_000, col.(*array.Timestamp).Value(0))
+			},
+		},
+		{
+			"timestamp with time zone",
+			"1970-01-01 00:00:01.000000 UTC",
+			func(t *testing.T, col arrow.Array) {
+				require.Equal(t, arrow.FixedWidthTypes.Timestamp_us, col.DataType())
+				assert.EqualValues(t, 1_000_000, col.(*array.Timestamp).Value(0))
+			},
+		},
+		{
+			"varbinary",
+			"hello",
+			func(t *testing.T, col arrow.Array) {
+				require.Equal(t, arrow.BinaryTypes.Binary, col.DataType())
+				assert.Equal(t, []byte("hello"), col.(*array.Binary).Value(0))
+			},
+		},
+		{
+			"binary",
+			"world",
+			func(t *testing.T, col arrow.Array) {
+				require.Equal(t, arrow.BinaryTypes.Binary, col.DataType())
+				assert.Equal(t, []byte("world"), col.(*array.Binary).Value(0))
+			},
+		},
+		{
+			// decimal is stringified
+			"decimal(18,2)",
+			"123.45",
+			func(t *testing.T, col arrow.Array) {
+				require.Equal(t, arrow.BinaryTypes.String, col.DataType())
+				assert.Equal(t, "123.45", col.(*array.String).Value(0))
+			},
+		},
+		{
+			// array is stringified
+			"array<int>",
+			"[1, 2, 3]",
+			func(t *testing.T, col arrow.Array) {
+				require.Equal(t, arrow.BinaryTypes.String, col.DataType())
+				assert.Equal(t, "[1, 2, 3]", col.(*array.String).Value(0))
+			},
+		},
+		{
+			// map is stringified
+			"map<varchar,int>",
+			"{a=1}",
+			func(t *testing.T, col arrow.Array) {
+				require.Equal(t, arrow.BinaryTypes.String, col.DataType())
+				assert.Equal(t, "{a=1}", col.(*array.String).Value(0))
+			},
+		},
+		{
+			// json is stringified
+			"json",
+			`{"k":"v"}`,
+			func(t *testing.T, col arrow.Array) {
+				require.Equal(t, arrow.BinaryTypes.String, col.DataType())
+				assert.Equal(t, `{"k":"v"}`, col.(*array.String).Value(0))
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.athenaType+"/"+tt.val, func(t *testing.T) {
+			colInfo := []types.ColumnInfo{{Name: strPtr("col"), Type: strPtr(tt.athenaType)}}
+			rows := []types.Row{{Data: []types.Datum{{VarCharValue: strPtr(tt.val)}}}}
+
+			schema := buildSchema(colInfo)
+			batch, err := buildRecordBatch(memory.DefaultAllocator, schema, rows)
+			require.NoError(t, err)
+			defer batch.Release()
+
+			require.EqualValues(t, 1, batch.NumRows())
+			require.EqualValues(t, 1, batch.NumCols())
+			tt.check(t, batch.Column(0))
+		})
+	}
 }
