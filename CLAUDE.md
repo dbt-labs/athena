@@ -131,7 +131,7 @@ Go 1.26 disallows CGo in `_test.go` files entirely. Shim tests are split into tw
 
 ### CI
 
-`.github/workflows/ci.yml` runs three jobs on every push/PR:
+`.github/workflows/ci.yml` runs `test` and `shim` on every push/PR, plus `integration` on pushes to `main`:
 
 | Job           | Trigger         | What it runs                                         |
 |---------------|-----------------|------------------------------------------------------|
