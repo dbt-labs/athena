@@ -23,7 +23,9 @@ else ifeq ($(shell go env GOOS),darwin)
 	DYLD_LIBRARY_PATH=. go run ./shimtest/
 endif
 
-libadbc_driver_athena.$(SUFFIX): athena/ ../go.mod ../go.sum
+SRCS := $(wildcard athena/*.go athena/*.c athena/*.h)
+
+libadbc_driver_athena.$(SUFFIX): $(SRCS) ../go.mod ../go.sum
 	$(GO_BUILD) -buildvcs=true -tags driverlib,netgo \
 		-o $@ -buildmode=c-shared \
 		./athena

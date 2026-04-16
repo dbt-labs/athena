@@ -49,7 +49,9 @@ jobs:
           cache-dependency-path: go/go.sum
 
       - name: Install C toolchain
-        run: sudo apt-get install -y gcc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc
 
       - name: Build shared library and run shim tests
         working-directory: go/pkg

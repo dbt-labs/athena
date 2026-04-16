@@ -296,6 +296,9 @@ func AthenaArrayStreamGetNext(stream *C.struct_ArrowArrayStream, array *C.struct
 	if stream == nil || stream.release != (*[0]byte)(C.AthenaArrayStreamRelease) || stream.private_data == nil {
 		return C.EINVAL
 	}
+	if array == nil {
+		return C.EINVAL
+	}
 	cStream := getFromHandle[cArrayStream](stream.private_data)
 	if cStream.rdr.Next() {
 		cdata.ExportArrowRecordBatch(cStream.rdr.RecordBatch(), toCdataArray(array), nil)
@@ -309,6 +312,9 @@ func AthenaArrayStreamGetNext(stream *C.struct_ArrowArrayStream, array *C.struct
 //export AthenaArrayStreamGetSchema
 func AthenaArrayStreamGetSchema(stream *C.struct_ArrowArrayStream, schema *C.struct_ArrowSchema) C.int {
 	if stream == nil || stream.release != (*[0]byte)(C.AthenaArrayStreamRelease) || stream.private_data == nil {
+		return C.EINVAL
+	}
+	if schema == nil {
 		return C.EINVAL
 	}
 	cStream := getFromHandle[cArrayStream](stream.private_data)
@@ -336,7 +342,6 @@ func AthenaArrayStreamRelease(stream *C.struct_ArrowArrayStream) {
 	C.free(unsafe.Pointer(stream.private_data))
 	stream.private_data = nil
 	h.Delete()
-	runtime.GC()
 }
 
 //export AthenaErrorFromArrayStream
@@ -844,9 +849,18 @@ func AthenaConnectionSetOptionDouble(db *C.struct_AdbcConnection, key *C.cchar_t
 			code = poison(err, "AdbcConnectionSetOptionDouble", e)
 		}
 	}()
-	conn := checkConnInit(db, err, "AdbcConnectionSetOptionDouble")
-	if conn == nil {
+	if !checkConnAlloc(db, err, "AdbcConnectionSetOptionDouble") {
 		return C.ADBC_STATUS_INVALID_STATE
+	}
+	conn := getFromHandle[cConn](db.private_data)
+
+	if conn.cnxn == nil {
+		k := C.GoString(key)
+		if conn.initArgs == nil {
+			conn.initArgs = map[string]string{}
+		}
+		conn.initArgs[k] = fmt.Sprintf("%g", float64(value))
+		return C.ADBC_STATUS_OK
 	}
 
 	opts, ok := conn.cnxn.(adbc.GetSetOptions)
@@ -865,9 +879,18 @@ func AthenaConnectionSetOptionInt(db *C.struct_AdbcConnection, key *C.cchar_t, v
 			code = poison(err, "AdbcConnectionSetOptionInt", e)
 		}
 	}()
-	conn := checkConnInit(db, err, "AdbcConnectionSetOptionInt")
-	if conn == nil {
+	if !checkConnAlloc(db, err, "AdbcConnectionSetOptionInt") {
 		return C.ADBC_STATUS_INVALID_STATE
+	}
+	conn := getFromHandle[cConn](db.private_data)
+
+	if conn.cnxn == nil {
+		k := C.GoString(key)
+		if conn.initArgs == nil {
+			conn.initArgs = map[string]string{}
+		}
+		conn.initArgs[k] = fmt.Sprintf("%d", int64(value))
+		return C.ADBC_STATUS_OK
 	}
 
 	opts, ok := conn.cnxn.(adbc.GetSetOptions)
@@ -1238,7 +1261,7 @@ func checkStmtInit(stmt *C.struct_AdbcStatement, err *C.struct_AdbcError, fname 
 	}
 	cStmt := getFromHandle[cStmt](stmt.private_data)
 	if cStmt.stmt == nil {
-		setErr(err, "%s: statement not allocated", fname)
+		setErr(err, "%s: statement not initialized", fname)
 		return nil
 	}
 	return cStmt
@@ -1877,8 +1900,11 @@ func exportStringOption(val string, out *C.char, length *C.size_t) C.AdbcStatusC
 }
 
 func exportBytesOption(val []byte, out *C.uint8_t, length *C.size_t) C.AdbcStatusCode {
-	if C.size_t(len(val)) <= *length {
-		sink := fromCArr[byte]((*byte)(out), int(*length))
+	var sink []byte
+	if out != nil {
+		sink = fromCArr[byte]((*byte)(out), int(*length))
+	}
+	if len(val) <= len(sink) {
 		copy(sink, val)
 	}
 	*length = C.size_t(len(val))
