@@ -4,7 +4,7 @@ An [ADBC](https://arrow.apache.org/adbc/) driver for [AWS Athena](https://aws.am
 
 ## Prerequisites
 
-- Go 1.21+
+- Go 1.26+
 - AWS credentials configured (via environment variables, `~/.aws/credentials`, or IAM role)
 
 ## Installation

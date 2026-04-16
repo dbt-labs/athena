@@ -1,4 +1,4 @@
-.PHONY: test test-unit test-integration lint vet
+.PHONY: test test-unit test-integration vet
 
 GO_DIR := ./go
 
