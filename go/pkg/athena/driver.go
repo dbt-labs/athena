@@ -777,6 +777,10 @@ func AthenaConnectionNew(cnxn *C.struct_AdbcConnection, err *C.struct_AdbcError)
 			code = poison(err, "AdbcConnectionNew", e)
 		}
 	}()
+	if cnxn == nil {
+		setErr(err, "AdbcConnectionNew: connection is nil")
+		return C.ADBC_STATUS_INVALID_ARGUMENT
+	}
 	if globalPoison.Load() {
 		setErr(err, "AdbcConnectionNew: Go panicked, driver is in unknown state")
 		return C.ADBC_STATUS_INTERNAL
@@ -1370,6 +1374,10 @@ func AthenaStatementNew(cnxn *C.struct_AdbcConnection, stmt *C.struct_AdbcStatem
 			code = poison(err, "AdbcStatementNew", e)
 		}
 	}()
+	if stmt == nil {
+		setErr(err, "AdbcStatementNew: statement is nil")
+		return C.ADBC_STATUS_INVALID_ARGUMENT
+	}
 	if globalPoison.Load() {
 		setErr(err, "AdbcStatementNew: Go panicked, driver is in unknown state")
 		return C.ADBC_STATUS_INTERNAL
@@ -1891,6 +1899,9 @@ func fillStringOption(val string, buf []byte) int {
 }
 
 func exportStringOption(val string, out *C.char, length *C.size_t) C.AdbcStatusCode {
+	if length == nil {
+		return C.ADBC_STATUS_INVALID_ARGUMENT
+	}
 	var buf []byte
 	if out != nil {
 		buf = fromCArr[byte]((*byte)(unsafe.Pointer(out)), int(*length))
@@ -1900,6 +1911,9 @@ func exportStringOption(val string, out *C.char, length *C.size_t) C.AdbcStatusC
 }
 
 func exportBytesOption(val []byte, out *C.uint8_t, length *C.size_t) C.AdbcStatusCode {
+	if length == nil {
+		return C.ADBC_STATUS_INVALID_ARGUMENT
+	}
 	var sink []byte
 	if out != nil {
 		sink = fromCArr[byte]((*byte)(out), int(*length))

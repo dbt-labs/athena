@@ -92,11 +92,20 @@ make test             # build .so → run unit tests → run shimtest
 make clean
 ```
 
-### Build tag
+### Build tags
 
-All shim files use `//go:build driverlib` (blank line after on `.go` files; C files
-use the `clang-format off` comment block). Never add shim code to files without this
-tag — it would pull CGo into the main driver package.
+- `go/pkg/athena/*.go` (shim source + tests): `//go:build driverlib`. A `doc.go` stub
+  with no build tag keeps the package visible to `go test ./...` without pulling in CGo.
+- `go/pkg/shimtest/main.go`: `//go:build ignore`. Requires the pre-built `.so`; excluded
+  from normal `go build`/`go test` to prevent linker errors. Use `make test` to run it.
+- C files (`utils.c`, `utils.h`): `// clang-format off/on` wraps `//go:build driverlib`.
+
+### Exported symbols
+
+The library exports two C entrypoints:
+- **`AdbcDriverAthenaInit`** — the primary Athena-specific entrypoint
+- **`AdbcDriverInit`** — generic alias in `utils.c` (`!ADBC_NO_COMMON_ENTRYPOINTS`),
+  delegates to `AdbcDriverAthenaInit`
 
 ### Testing
 

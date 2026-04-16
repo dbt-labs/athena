@@ -19,6 +19,10 @@
 // It links directly against libadbc_driver_athena and calls AdbcDriverAthenaInit
 // to verify that the init entrypoint behaves correctly.
 //
+// It is excluded from normal `go test ./...` builds (//go:build ignore) because
+// it requires libadbc_driver_athena.so to be pre-built. Use `make test` in the
+// parent directory instead, which builds the library first.
+//
 // Build and run:
 //
 //	make -C ..
@@ -27,6 +31,9 @@
 // Or via the Makefile test target:
 //
 //	make -C .. test
+
+//go:build ignore
+
 package main
 
 // #cgo CFLAGS: -I../athena
