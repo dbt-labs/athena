@@ -5,7 +5,7 @@ ifeq ($(shell go env GOOS),linux)
 	SUFFIX=so
 else ifeq ($(shell go env GOOS),windows)
 	SUFFIX=dll
-	RM=del
+	RM=del /Q 2>nul ||
 else
 	SUFFIX=dylib
 endif

@@ -101,6 +101,10 @@ func setErrWithDetails(err *C.struct_AdbcError, adbcError adbc.Error) {
 		return
 	}
 
+	if err.release != nil {
+		C.AthenaerrRelease(err)
+	}
+
 	for i := range 5 {
 		err.sqlstate[i] = C.char(adbcError.SqlState[i])
 	}
@@ -510,7 +514,7 @@ func AthenaDatabaseNew(db *C.struct_AdbcDatabase, err *C.struct_AdbcError) (code
 func AthenaDatabaseRelease(db *C.struct_AdbcDatabase, err *C.struct_AdbcError) (code C.AdbcStatusCode) {
 	defer func() {
 		if e := recover(); e != nil {
-			code = poison(err, "AdbcDatabaseInit", e)
+			code = poison(err, "AdbcDatabaseRelease", e)
 		}
 	}()
 	if !checkDBAlloc(db, err, "AdbcDatabaseRelease") {
@@ -1091,17 +1095,17 @@ func AthenaConnectionGetStatistics(cnxn *C.struct_AdbcConnection, catalog, dbSch
 func AthenaConnectionGetStatisticNames(cnxn *C.struct_AdbcConnection, out *C.struct_ArrowArrayStream, err *C.struct_AdbcError) (code C.AdbcStatusCode) {
 	defer func() {
 		if e := recover(); e != nil {
-			code = poison(err, "AdbcConnectionGetStatistics", e)
+			code = poison(err, "AdbcConnectionGetStatisticNames", e)
 		}
 	}()
-	conn := checkConnInit(cnxn, err, "AdbcConnectionGetStatistics")
+	conn := checkConnInit(cnxn, err, "AdbcConnectionGetStatisticNames")
 	if conn == nil {
 		return C.ADBC_STATUS_INVALID_STATE
 	}
 
 	gs, ok := conn.cnxn.(adbc.ConnectionGetStatistics)
 	if !ok {
-		setErr(err, "AdbcConnectionGetStatistics: not supported")
+		setErr(err, "AdbcConnectionGetStatisticNames: not supported")
 		return C.ADBC_STATUS_NOT_IMPLEMENTED
 	}
 
@@ -1476,10 +1480,10 @@ func AthenaStatementExecuteQuery(stmt *C.struct_AdbcStatement, out *C.struct_Arr
 func AthenaStatementExecuteSchema(stmt *C.struct_AdbcStatement, schema *C.struct_ArrowSchema, err *C.struct_AdbcError) (code C.AdbcStatusCode) {
 	defer func() {
 		if e := recover(); e != nil {
-			code = poison(err, "AdbcStatementExecuteQuery", e)
+			code = poison(err, "AdbcStatementExecuteSchema", e)
 		}
 	}()
-	st := checkStmtInit(stmt, err, "AdbcStatementExecuteQuery")
+	st := checkStmtInit(stmt, err, "AdbcStatementExecuteSchema")
 	if st == nil {
 		return C.ADBC_STATUS_INVALID_STATE
 	}
@@ -1543,8 +1547,9 @@ func AthenaStatementBind(stmt *C.struct_AdbcStatement, values *C.struct_ArrowArr
 
 	rec, e := cdata.ImportCRecordBatch(toCdataArray(values), toCdataSchema(schema))
 	if e != nil {
-		// if there was an error, we need to manually release the input
+		// if there was an error, we need to manually release both inputs
 		cdata.ReleaseCArrowArray(toCdataArray(values))
+		cdata.ReleaseCArrowSchema(toCdataSchema(schema))
 		return C.AdbcStatusCode(errToAdbcErr(err, e))
 	}
 	defer rec.Release()
@@ -1568,7 +1573,12 @@ func AthenaStatementBindStream(stmt *C.struct_AdbcStatement, stream *C.struct_Ar
 	if e != nil {
 		return C.AdbcStatusCode(errToAdbcErr(err, e))
 	}
-	return C.AdbcStatusCode(errToAdbcErr(err, st.stmt.BindStream(st.newContext(), rdr.(array.RecordReader))))
+	recRdr := rdr.(array.RecordReader)
+	e = st.stmt.BindStream(st.newContext(), recRdr)
+	if e != nil {
+		recRdr.Release()
+	}
+	return C.AdbcStatusCode(errToAdbcErr(err, e))
 }
 
 //export AthenaStatementGetParameterSchema
@@ -1741,6 +1751,10 @@ func AthenaStatementExecutePartitions(stmt *C.struct_AdbcStatement, schema *C.st
 
 //export AdbcDriverAthenaInit
 func AdbcDriverAthenaInit(version C.int, rawDriver *C.void, err *C.struct_AdbcError) C.AdbcStatusCode {
+	if rawDriver == nil {
+		setErr(err, "AdbcDriverAthenaInit: driver output struct is null")
+		return C.ADBC_STATUS_INVALID_ARGUMENT
+	}
 	driver := (*C.struct_AdbcDriver)(unsafe.Pointer(rawDriver))
 
 	switch version {
@@ -1755,6 +1769,7 @@ func AdbcDriverAthenaInit(version C.int, rawDriver *C.void, err *C.struct_AdbcEr
 		return C.ADBC_STATUS_NOT_IMPLEMENTED
 	}
 
+	driver.release = (*[0]byte)(C.AthenaDriverRelease)
 	driver.DatabaseInit = (*[0]byte)(C.AthenaDatabaseInit)
 	driver.DatabaseNew = (*[0]byte)(C.AthenaDatabaseNew)
 	driver.DatabaseRelease = (*[0]byte)(C.AthenaDatabaseRelease)
@@ -1842,10 +1857,10 @@ func getFromHandle[T any](ptr unsafe.Pointer) *T {
 
 func exportStringOption(val string, out *C.char, length *C.size_t) C.AdbcStatusCode {
 	lenWithTerminator := C.size_t(len(val) + 1)
-	if lenWithTerminator <= *length {
+	if out != nil && lenWithTerminator <= *length {
 		sink := fromCArr[byte]((*byte)(unsafe.Pointer(out)), int(*length))
 		copy(sink, val)
-		sink[lenWithTerminator] = 0
+		sink[len(val)] = 0
 	}
 	*length = lenWithTerminator
 	return C.ADBC_STATUS_OK

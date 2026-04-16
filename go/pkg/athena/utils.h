@@ -17,8 +17,8 @@
 
 // clang-format off
 //go:build driverlib
-// clang-format on
 
+// clang-format on
 #pragma once
 
 #include <stdlib.h>
@@ -154,6 +154,8 @@ AdbcStatusCode AthenaStatementSetSubstraitPlan(struct AdbcStatement* stmt,
 
 AdbcStatusCode AdbcDriverAthenaInit(int version, void* rawDriver,
                                     struct AdbcError* err);
+AdbcStatusCode AthenaDriverRelease(struct AdbcDriver* driver,
+                                   struct AdbcError* err);
 
 static inline void AthenaerrRelease(struct AdbcError* error) {
   if (error->release) {

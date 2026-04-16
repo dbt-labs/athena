@@ -17,7 +17,8 @@
 
 // clang-format off
 //go:build driverlib
-//  clang-format on
+
+// clang-format on
 
 #include "utils.h"
 
@@ -435,6 +436,13 @@ AdbcStatusCode AdbcDriverInit(int version, void* driver, struct AdbcError* error
 
 int AthenaArrayStreamGetSchema(struct ArrowArrayStream*, struct ArrowSchema*);
 int AthenaArrayStreamGetNext(struct ArrowArrayStream*, struct ArrowArray*);
+
+AdbcStatusCode AthenaDriverRelease(struct AdbcDriver* driver,
+                                    struct AdbcError* err) {
+  (void)driver;
+  (void)err;
+  return ADBC_STATUS_OK;
+}
 
 int AthenaArrayStreamGetSchemaTrampoline(struct ArrowArrayStream* stream,
                                          struct ArrowSchema* out) {
