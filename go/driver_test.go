@@ -23,8 +23,10 @@ import (
 	"testing"
 
 	"github.com/apache/arrow-adbc/go/adbc"
-	athena "github.com/dbt-labs/athena/go"
+	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/memory"
+	athena "github.com/dbt-labs/athena/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -159,7 +161,10 @@ func TestAllOptionConstants(t *testing.T) {
 	assert.Equal(t, "athena.aws.profile", athena.OptionProfileName)
 }
 
-func TestIntegration(t *testing.T) {
+// integrationConn opens a real Athena connection from environment variables and
+// registers cleanup. Skips the test if ADBC_ATHENA_TESTS is unset.
+func integrationConn(t *testing.T) adbc.Connection {
+	t.Helper()
 	if os.Getenv("ADBC_ATHENA_TESTS") == "" {
 		t.Skip("set ADBC_ATHENA_TESTS=1 to run integration tests")
 	}
@@ -171,31 +176,107 @@ func TestIntegration(t *testing.T) {
 	s3Dir := os.Getenv("ATHENA_S3_STAGING_DIR")
 	require.NotEmpty(t, s3Dir, "ATHENA_S3_STAGING_DIR must be set for integration tests")
 
-	drv := athena.NewDriver(memory.DefaultAllocator)
-	db, err := drv.NewDatabase(map[string]string{
+	catalog := os.Getenv("ATHENA_CATALOG")
+	if catalog == "" {
+		catalog = "AwsDataCatalog"
+	}
+	schema := os.Getenv("ATHENA_SCHEMA")
+	if schema == "" {
+		schema = "default"
+	}
+
+	opts := map[string]string{
 		athena.OptionRegion:       region,
 		athena.OptionS3StagingDir: s3Dir,
+		athena.OptionCatalog:      catalog,
+		athena.OptionSchema:       schema,
 		athena.OptionAuthType:     athena.AuthTypeDefault,
-	})
+	}
+	if profile := os.Getenv("AWS_PROFILE"); profile != "" {
+		opts[athena.OptionAuthType]    = athena.AuthTypeProfile
+		opts[athena.OptionProfileName] = profile
+	}
+
+	drv := athena.NewDriver(memory.DefaultAllocator)
+	db, err := drv.NewDatabase(opts)
 	require.NoError(t, err)
-	defer db.Close()
+	t.Cleanup(func() { db.Close() })
 
 	conn, err := db.Open(context.Background())
 	require.NoError(t, err)
-	defer conn.Close()
+	t.Cleanup(func() { conn.Close() })
 
+	return conn
+}
+
+// runQuery is a helper that executes sql and returns the first record.
+func runQuery(t *testing.T, conn adbc.Connection, sql string) arrow.Record {
+	t.Helper()
 	stmt, err := conn.NewStatement()
 	require.NoError(t, err)
-	defer stmt.Close()
+	t.Cleanup(func() { stmt.Close() })
 
-	err = stmt.SetSqlQuery("SELECT 1 AS n")
-	require.NoError(t, err)
+	require.NoError(t, stmt.SetSqlQuery(sql))
 
 	rdr, _, err := stmt.ExecuteQuery(context.Background())
 	require.NoError(t, err)
-	defer rdr.Release()
+	t.Cleanup(func() { rdr.Release() })
 
-	assert.True(t, rdr.Next())
-	rec := rdr.Record()
+	require.True(t, rdr.Next(), "expected at least one record")
+	return rdr.Record()
+}
+
+func TestIntegration(t *testing.T) {
+	conn := integrationConn(t)
+	rec := runQuery(t, conn, "SELECT 1 AS n")
 	assert.EqualValues(t, 1, rec.NumCols())
+}
+
+func TestIntegration_DataTypes(t *testing.T) {
+	conn := integrationConn(t)
+
+	// Covers scalar types and two nested types (array, map).
+	// Nested types are returned by Athena as opaque strings and stored as
+	// Arrow utf8 columns by this driver.
+	const query = `
+SELECT
+  CAST('hello'           AS VARCHAR)   AS str_col,
+  CAST(42                AS BIGINT)    AS bigint_col,
+  CAST(7                 AS INTEGER)   AS int_col,
+  CAST(3.14              AS DOUBLE)    AS double_col,
+  true                                 AS bool_col,
+  DATE        '2024-01-15'             AS date_col,
+  TIMESTAMP   '2024-01-15 12:30:00'   AS ts_col,
+  ARRAY[1, 2, 3]                       AS array_col,
+  MAP(ARRAY['k'], ARRAY['v'])          AS map_col
+`
+	rec := runQuery(t, conn, query)
+
+	require.EqualValues(t, 9, rec.NumCols(), "expected 9 columns")
+	require.EqualValues(t, 1, rec.NumRows(), "expected 1 row")
+
+	schema := rec.Schema()
+
+	// Scalar types map to their native Arrow types.
+	assert.Equal(t, arrow.BinaryTypes.String,         schema.Field(0).Type, "str_col")
+	assert.Equal(t, arrow.PrimitiveTypes.Int64,        schema.Field(1).Type, "bigint_col")
+	assert.Equal(t, arrow.PrimitiveTypes.Int32,        schema.Field(2).Type, "int_col")
+	assert.Equal(t, arrow.PrimitiveTypes.Float64,      schema.Field(3).Type, "double_col")
+	assert.Equal(t, arrow.FixedWidthTypes.Boolean,     schema.Field(4).Type, "bool_col")
+	assert.Equal(t, arrow.FixedWidthTypes.Date32,      schema.Field(5).Type, "date_col")
+	assert.Equal(t, arrow.FixedWidthTypes.Timestamp_us, schema.Field(6).Type, "ts_col")
+	// Nested types are stringified.
+	assert.Equal(t, arrow.BinaryTypes.String, schema.Field(7).Type, "array_col")
+	assert.Equal(t, arrow.BinaryTypes.String, schema.Field(8).Type, "map_col")
+
+	// Spot-check scalar values.
+	assert.Equal(t, "hello", rec.Column(0).(*array.String).Value(0))
+	assert.EqualValues(t, 42, rec.Column(1).(*array.Int64).Value(0))
+	assert.EqualValues(t, 7, rec.Column(2).(*array.Int32).Value(0))
+	assert.InDelta(t, 3.14, rec.Column(3).(*array.Float64).Value(0), 1e-9)
+	assert.True(t, rec.Column(4).(*array.Boolean).Value(0))
+
+	// Nested columns must be non-empty strings.
+	assert.NotEmpty(t, rec.Column(7).(*array.String).Value(0), "array_col should be non-empty")
+	assert.NotEmpty(t, rec.Column(8).(*array.String).Value(0), "map_col should be non-empty")
 }
