@@ -204,6 +204,22 @@ func TestBuildRecordBatch_AllTypes(t *testing.T) {
 		check      func(t *testing.T, col arrow.Array)
 	}{
 		{
+			"bigint",
+			"9223372036854775807",
+			func(t *testing.T, col arrow.Array) {
+				require.Equal(t, arrow.PrimitiveTypes.Int64, col.DataType())
+				assert.EqualValues(t, int64(9223372036854775807), col.(*array.Int64).Value(0))
+			},
+		},
+		{
+			"varchar",
+			"hello",
+			func(t *testing.T, col arrow.Array) {
+				require.Equal(t, arrow.BinaryTypes.String, col.DataType())
+				assert.Equal(t, "hello", col.(*array.String).Value(0))
+			},
+		},
+		{
 			"integer",
 			"123",
 			func(t *testing.T, col arrow.Array) {
