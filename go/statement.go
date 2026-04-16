@@ -268,7 +268,7 @@ func (s *statementImpl) buildPagedRecordReader(ctx context.Context, execID *stri
 			continue
 		}
 
-		batch, err := buildRecordBatch(s.conn.Alloc, schema, colInfo, rows)
+		batch, err := buildRecordBatch(s.conn.Alloc, schema, rows)
 		if err != nil {
 			for _, b := range batches {
 				b.Release()
