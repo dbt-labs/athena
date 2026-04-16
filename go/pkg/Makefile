@@ -10,9 +10,18 @@ else
 	SUFFIX=dylib
 endif
 
-.PHONY: all clean
+.PHONY: all clean test
 
 all: libadbc_driver_athena.$(SUFFIX)
+
+# Run unit tests (pure-Go helpers) and CGo integration tests against the built .so.
+test: libadbc_driver_athena.$(SUFFIX)
+	cd .. && go test -tags driverlib -v ./pkg/athena/
+ifeq ($(shell go env GOOS),linux)
+	LD_LIBRARY_PATH=. go run ./shimtest/
+else ifeq ($(shell go env GOOS),darwin)
+	DYLD_LIBRARY_PATH=. go run ./shimtest/
+endif
 
 libadbc_driver_athena.$(SUFFIX): athena/ ../go.mod ../go.sum
 	$(GO_BUILD) -buildvcs=true -tags driverlib,netgo \

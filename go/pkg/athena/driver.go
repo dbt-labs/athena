@@ -117,7 +117,7 @@ func setErrWithDetails(err *C.struct_AdbcError, adbcError adbc.Error) {
 		if adbcError.VendorCode != C.ADBC_ERROR_VENDOR_CODE_PRIVATE_DATA {
 			err.vendor_code = C.int(adbcError.VendorCode)
 		}
-		setErr(err, adbcError.Msg)
+		setErr(err, "%s", adbcError.Msg)
 		return
 	}
 
@@ -126,7 +126,7 @@ func setErrWithDetails(err *C.struct_AdbcError, adbcError adbc.Error) {
 	// `vendor_code` and not populate `private_data` with the error details.
 	if numDetails == 0 && adbcError.VendorCode != 0 && adbcError.VendorCode != C.ADBC_ERROR_VENDOR_CODE_PRIVATE_DATA {
 		err.vendor_code = C.int(adbcError.VendorCode)
-		setErr(err, adbcError.Msg)
+		setErr(err, "%s", adbcError.Msg)
 		return
 	}
 
@@ -179,7 +179,7 @@ func errToAdbcErr(adbcerr *C.struct_AdbcError, err error) adbc.Status {
 		return adbcError.Code
 	}
 
-	setErr(adbcerr, err.Error())
+	setErr(adbcerr, "%s", err.Error())
 	return adbc.StatusUnknown
 }
 
@@ -1855,14 +1855,24 @@ func getFromHandle[T any](ptr unsafe.Pointer) *T {
 	return cgo.Handle((uintptr)(*hptr)).Value().(*T)
 }
 
-func exportStringOption(val string, out *C.char, length *C.size_t) C.AdbcStatusCode {
-	lenWithTerminator := C.size_t(len(val) + 1)
-	if out != nil && lenWithTerminator <= *length {
-		sink := fromCArr[byte]((*byte)(unsafe.Pointer(out)), int(*length))
-		copy(sink, val)
-		sink[len(val)] = 0
+// fillStringOption writes val into buf (if buf is non-nil and large enough)
+// and returns the required buffer size including the NUL terminator.
+// This is the pure-Go core of exportStringOption and is tested directly.
+func fillStringOption(val string, buf []byte) int {
+	needed := len(val) + 1
+	if buf != nil && needed <= len(buf) {
+		copy(buf, val)
+		buf[len(val)] = 0
 	}
-	*length = lenWithTerminator
+	return needed
+}
+
+func exportStringOption(val string, out *C.char, length *C.size_t) C.AdbcStatusCode {
+	var buf []byte
+	if out != nil {
+		buf = fromCArr[byte]((*byte)(unsafe.Pointer(out)), int(*length))
+	}
+	*length = C.size_t(fillStringOption(val, buf))
 	return C.ADBC_STATUS_OK
 }
 
