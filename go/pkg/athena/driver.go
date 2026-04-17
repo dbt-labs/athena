@@ -509,6 +509,10 @@ func AthenaDatabaseNew(db *C.struct_AdbcDatabase, err *C.struct_AdbcError) (code
 			code = poison(err, "AdbcDatabaseNew", e)
 		}
 	}()
+	if db == nil {
+		setErr(err, "AdbcDatabaseNew: database is nil")
+		return C.ADBC_STATUS_INVALID_ARGUMENT
+	}
 	if globalPoison.Load() {
 		setErr(err, "AdbcDatabaseNew: Go panicked, driver is in unknown state")
 		return C.ADBC_STATUS_INTERNAL
@@ -1072,6 +1076,10 @@ func AthenaConnectionGetInfo(cnxn *C.struct_AdbcConnection, codes *C.cuint32_t, 
 	if conn == nil {
 		return C.ADBC_STATUS_INVALID_STATE
 	}
+	if out == nil {
+		setErr(err, "AdbcConnectionGetInfo: out stream is nil")
+		return C.ADBC_STATUS_INVALID_ARGUMENT
+	}
 
 	infoCodes := fromCArr[adbc.InfoCode](codes, int(len))
 	rdr, e := conn.cnxn.GetInfo(conn.newContext(), infoCodes)
@@ -1096,6 +1104,10 @@ func AthenaConnectionGetObjects(cnxn *C.struct_AdbcConnection, depth C.int, cata
 	if conn == nil {
 		return C.ADBC_STATUS_INVALID_STATE
 	}
+	if out == nil {
+		setErr(err, "AdbcConnectionGetObjects: out stream is nil")
+		return C.ADBC_STATUS_INVALID_ARGUMENT
+	}
 
 	rdr, e := conn.cnxn.GetObjects(conn.newContext(), adbc.ObjectDepth(depth), toStrPtr(catalog), toStrPtr(dbSchema), toStrPtr(tableName), toStrPtr(columnName), toStrSlice(tableType))
 	if e != nil {
@@ -1116,6 +1128,10 @@ func AthenaConnectionGetStatistics(cnxn *C.struct_AdbcConnection, catalog, dbSch
 	conn := checkConnInit(cnxn, err, "AdbcConnectionGetStatistics")
 	if conn == nil {
 		return C.ADBC_STATUS_INVALID_STATE
+	}
+	if out == nil {
+		setErr(err, "AdbcConnectionGetStatistics: out stream is nil")
+		return C.ADBC_STATUS_INVALID_ARGUMENT
 	}
 
 	gs, ok := conn.cnxn.(adbc.ConnectionGetStatistics)
@@ -1145,6 +1161,10 @@ func AthenaConnectionGetStatisticNames(cnxn *C.struct_AdbcConnection, out *C.str
 	if conn == nil {
 		return C.ADBC_STATUS_INVALID_STATE
 	}
+	if out == nil {
+		setErr(err, "AdbcConnectionGetStatisticNames: out stream is nil")
+		return C.ADBC_STATUS_INVALID_ARGUMENT
+	}
 
 	gs, ok := conn.cnxn.(adbc.ConnectionGetStatistics)
 	if !ok {
@@ -1173,6 +1193,10 @@ func AthenaConnectionGetTableSchema(cnxn *C.struct_AdbcConnection, catalog, dbSc
 		return C.ADBC_STATUS_INVALID_STATE
 	}
 
+	if schema == nil {
+		setErr(err, "AdbcConnectionGetTableSchema: schema output is nil")
+		return C.ADBC_STATUS_INVALID_ARGUMENT
+	}
 	sc, e := conn.cnxn.GetTableSchema(conn.newContext(), toStrPtr(catalog), toStrPtr(dbSchema), C.GoString(tableName))
 	if e != nil {
 		return C.AdbcStatusCode(errToAdbcErr(err, e))
@@ -1191,6 +1215,10 @@ func AthenaConnectionGetTableTypes(cnxn *C.struct_AdbcConnection, out *C.struct_
 	conn := checkConnInit(cnxn, err, "AdbcConnectionGetTableTypes")
 	if conn == nil {
 		return C.ADBC_STATUS_INVALID_STATE
+	}
+	if out == nil {
+		setErr(err, "AdbcConnectionGetTableTypes: out stream is nil")
+		return C.ADBC_STATUS_INVALID_ARGUMENT
 	}
 
 	rdr, e := conn.cnxn.GetTableTypes(conn.newContext())
@@ -1212,6 +1240,10 @@ func AthenaConnectionReadPartition(cnxn *C.struct_AdbcConnection, serialized *C.
 	conn := checkConnInit(cnxn, err, "AdbcConnectionReadPartition")
 	if conn == nil {
 		return C.ADBC_STATUS_INVALID_STATE
+	}
+	if out == nil {
+		setErr(err, "AdbcConnectionReadPartition: out stream is nil")
+		return C.ADBC_STATUS_INVALID_ARGUMENT
 	}
 
 	rdr, e := conn.cnxn.ReadPartition(conn.newContext(), fromCArr[byte](serialized, int(serializedLen)))
@@ -1543,6 +1575,10 @@ func AthenaStatementExecuteSchema(stmt *C.struct_AdbcStatement, schema *C.struct
 		return C.ADBC_STATUS_INVALID_STATE
 	}
 
+	if schema == nil {
+		setErr(err, "AdbcStatementExecuteSchema: schema output is nil")
+		return C.ADBC_STATUS_INVALID_ARGUMENT
+	}
 	es, ok := st.stmt.(adbc.StatementExecuteSchema)
 	if !ok {
 		setErr(err, "AdbcStatementExecuteSchema: not supported")
@@ -1599,6 +1635,14 @@ func AthenaStatementBind(stmt *C.struct_AdbcStatement, values *C.struct_ArrowArr
 	if st == nil {
 		return C.ADBC_STATUS_INVALID_STATE
 	}
+	if values == nil {
+		setErr(err, "AdbcStatementBind: values is nil")
+		return C.ADBC_STATUS_INVALID_ARGUMENT
+	}
+	if schema == nil {
+		setErr(err, "AdbcStatementBind: schema is nil")
+		return C.ADBC_STATUS_INVALID_ARGUMENT
+	}
 
 	rec, e := cdata.ImportCRecordBatch(toCdataArray(values), toCdataSchema(schema))
 	if e != nil {
@@ -1622,6 +1666,10 @@ func AthenaStatementBindStream(stmt *C.struct_AdbcStatement, stream *C.struct_Ar
 	st := checkStmtInit(stmt, err, "AdbcStatementBindStream")
 	if st == nil {
 		return C.ADBC_STATUS_INVALID_STATE
+	}
+	if stream == nil {
+		setErr(err, "AdbcStatementBindStream: stream is nil")
+		return C.ADBC_STATUS_INVALID_ARGUMENT
 	}
 
 	rdr, e := cdata.ImportCRecordReader(toCdataStream(stream), nil)
@@ -1648,6 +1696,10 @@ func AthenaStatementGetParameterSchema(stmt *C.struct_AdbcStatement, schema *C.s
 		return C.ADBC_STATUS_INVALID_STATE
 	}
 
+	if schema == nil {
+		setErr(err, "AdbcStatementGetParameterSchema: schema output is nil")
+		return C.ADBC_STATUS_INVALID_ARGUMENT
+	}
 	sc, e := st.stmt.GetParameterSchema()
 	if e != nil {
 		return C.AdbcStatusCode(errToAdbcErr(err, e))
@@ -1737,7 +1789,7 @@ func AthenaStatementSetOptionInt(db *C.struct_AdbcStatement, key *C.cchar_t, val
 
 //export releasePartitions
 func releasePartitions(partitions *C.struct_AdbcPartitions) {
-	if partitions.private_data == nil {
+	if partitions == nil || partitions.private_data == nil {
 		return
 	}
 
