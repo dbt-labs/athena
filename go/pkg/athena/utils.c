@@ -17,9 +17,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-// go:build driverlib
-
 // clang-format off
+//go:build driverlib
 
 // clang-format on
 
