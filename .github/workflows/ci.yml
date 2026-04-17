@@ -31,6 +31,33 @@ jobs:
         run: go test -race -count=1 ./...
 
   # ──────────────────────────────────────────────────────────────────────────
+  # CGo FFI shim — build the shared library and run shim-level tests.
+  # Covers the fixes from the Copilot review (NULL-pointer guard, off-by-one
+  # NUL terminator, driver.release, wrong function names in panic handlers).
+  # ──────────────────────────────────────────────────────────────────────────
+  shim:
+    name: CGo FFI Shim Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+
+      - name: Install C toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc
+
+      - name: Build shared library and run shim tests
+        working-directory: go/pkg
+        run: make test
+
+  # ──────────────────────────────────────────────────────────────────────────
   # Integration tests — require real AWS credentials and Athena resources.
   # Runs only on pushes to main, not on PRs, to keep credentials out of
   # fork-originated workflows.

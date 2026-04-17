@@ -67,3 +67,76 @@ All option keys are `"athena.<name>"` strings, exported as `Option*` constants f
 - `nilIfEmpty(s string) *string` — used when Athena API fields require nil rather than empty string
 - Connection copies `catalog`/`schema` from the database at `Open()` time for per-connection isolation
 - `StopQueryExecution` is called best-effort on context cancellation (5 s timeout) to avoid unnecessary Athena cost
+
+---
+
+## CGo FFI shim (`go/pkg/`)
+
+The shim wraps the pure-Go driver in C-callable ADBC functions and is compiled with
+`-buildmode=c-shared` to produce `libadbc_driver_athena.so` (`.dylib` on macOS,
+`.dll` on Windows). dbt-fusion loads this via `dlopen`.
+
+```
+go/pkg/
+  Makefile
+  athena/          package main, //go:build driverlib — shim source + unit tests
+  shimtest/        standalone CGo integration-test program
+```
+
+### Build
+
+```bash
+cd go/pkg
+make                  # produces libadbc_driver_athena.so (deletes the generated .h)
+make test             # build .so → run unit tests → run shimtest
+make clean
+```
+
+### Build tags
+
+- `go/pkg/athena/*.go` (shim source + tests): `//go:build driverlib`. A `doc.go` stub
+  with no build tag keeps the package visible to `go test ./...` without pulling in CGo.
+- `go/pkg/shimtest/main.go`: `//go:build ignore`. Requires the pre-built `.so`; excluded
+  from normal `go build`/`go test` to prevent linker errors. Use `make test` to run it.
+- C files (`utils.c`, `utils.h`): `// clang-format off/on` wraps `//go:build driverlib`.
+
+### Exported symbols
+
+The library exports a single driver-init entrypoint:
+- **`AdbcDriverAthenaInit`** — the Athena-specific entrypoint
+
+`utils.c` has a `#if !defined(ADBC_NO_COMMON_ENTRYPOINTS)` block that exports generic
+wrappers (e.g. `AdbcErrorGetDetailCount`), but deliberately does **not** include a
+generic `AdbcDriverInit` alias — see the comment at the bottom of that block.
+
+### Testing
+
+Go 1.26 disallows CGo in `_test.go` files entirely. Shim tests are split into two layers:
+
+1. **Unit tests** (`go/pkg/athena/shim_test.go`, `//go:build driverlib`): pure-Go tests
+   for helpers extracted from the shim (currently `fillStringOption`).
+   Run via: `cd go && go test -tags driverlib -v ./pkg/athena/`
+
+2. **Integration tests** (`go/pkg/shimtest/main.go`): standalone CGo program that links
+   against the built `.so` and calls `AdbcDriverAthenaInit` directly.
+   Run via `make test` (sets `LD_LIBRARY_PATH=.` on Linux, `DYLD_LIBRARY_PATH=.` on macOS).
+
+### Key shim invariants
+
+- **`AdbcDriverAthenaInit`** is the sole exported entrypoint.
+- **`driver.release`** must be set (points to `AthenaDriverRelease`, a no-op C function).
+  Driver managers crash on unload if it is nil.
+- **`fillStringOption(val string, buf []byte) int`** is the pure-Go core of
+  `exportStringOption`. It handles nil and too-small buffers safely; always returns the
+  required length (`len(val)+1`).
+- **`setErrWithDetails`** releases any prior error before writing a new one.
+
+### CI
+
+`.github/workflows/ci.yml` runs `test` and `shim` on every push/PR, plus `integration` on pushes to `main`:
+
+| Job           | Trigger         | What it runs                                         |
+|---------------|-----------------|------------------------------------------------------|
+| `test`        | all branches    | `go test -race -count=1 ./...`                       |
+| `shim`        | all branches    | `make test` in `go/pkg/` (builds `.so` + shimtest)   |
+| `integration` | push to `main`  | `go test -race -run TestIntegration` with AWS creds  |

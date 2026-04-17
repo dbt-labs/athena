@@ -4,6 +4,8 @@
 *.dll
 *.so
 *.dylib
+# Generated C header from -buildmode=c-shared
+go/pkg/libadbc_driver_athena.h
 *.test
 *.out
 # Compiled Go binaries produced by `go build` (no extension on Linux/macOS)
