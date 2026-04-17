@@ -10,9 +10,12 @@ else
 	SUFFIX=dylib
 endif
 
-.PHONY: all clean test
+.PHONY: all clean test regenerate
 
 all: libadbc_driver_athena.$(SUFFIX)
+
+regenerate:
+	go run gen/main.go -prefix Athena -o ./athena -driver ..
 
 # Run unit tests (pure-Go helpers) and CGo integration tests against the built .so.
 test: libadbc_driver_athena.$(SUFFIX)
