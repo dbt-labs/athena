@@ -48,8 +48,8 @@ func TestAthenaTypeStringToArrow(t *testing.T) {
 		{"real", arrow.PrimitiveTypes.Float32},
 		{"boolean", arrow.FixedWidthTypes.Boolean},
 		{"date", arrow.FixedWidthTypes.Date32},
-		{"timestamp", arrow.FixedWidthTypes.Timestamp_us},
-		{"timestamp with time zone", arrow.FixedWidthTypes.Timestamp_us},
+		{"timestamp", arrow.FixedWidthTypes.Timestamp_ms},
+		{"timestamp with time zone", arrow.FixedWidthTypes.Timestamp_ms},
 		{"varbinary", arrow.BinaryTypes.Binary},
 		{"binary", arrow.BinaryTypes.Binary},
 		{"decimal(10,2)", arrow.BinaryTypes.String},
@@ -81,6 +81,14 @@ func TestBuildSchema(t *testing.T) {
 	assert.Equal(t, arrow.BinaryTypes.String, schema.Field(1).Type)
 	assert.Equal(t, "active", schema.Field(2).Name)
 	assert.Equal(t, arrow.FixedWidthTypes.Boolean, schema.Field(2).Type)
+
+	// Each field must carry the raw Athena type string under "ATHENA:type".
+	for i, want := range []string{"bigint", "varchar", "boolean"} {
+		f := schema.Field(i)
+		idx := f.Metadata.FindKey("ATHENA:type")
+		require.NotEqual(t, -1, idx, "field %d missing ATHENA:type metadata", i)
+		assert.Equal(t, want, f.Metadata.Values()[idx], "field %d ATHENA:type", i)
+	}
 }
 
 func TestNewRecordReader_Empty(t *testing.T) {
@@ -157,41 +165,41 @@ func TestParseDateToDays(t *testing.T) {
 	assert.Equal(t, int32(10957), days)
 }
 
-func TestParseTimestampToMicros(t *testing.T) {
-	// 1970-01-01 00:00:00 = 0 microseconds
-	us, err := parseTimestampToMicros("1970-01-01 00:00:00")
+func TestParseTimestampToMillis(t *testing.T) {
+	// 1970-01-01 00:00:00 = 0 milliseconds
+	ms, err := parseTimestampToMillis("1970-01-01 00:00:00")
 	require.NoError(t, err)
-	assert.Equal(t, int64(0), us)
+	assert.Equal(t, int64(0), ms)
 
-	// 1970-01-01 00:00:01 = 1_000_000 microseconds
-	us, err = parseTimestampToMicros("1970-01-01 00:00:01")
+	// 1970-01-01 00:00:01 = 1_000 milliseconds
+	ms, err = parseTimestampToMillis("1970-01-01 00:00:01")
 	require.NoError(t, err)
-	assert.Equal(t, int64(1_000_000), us)
+	assert.Equal(t, int64(1_000), ms)
 
-	// With fractional seconds
-	us, err = parseTimestampToMicros("1970-01-01 00:00:00.5")
+	// With fractional seconds — ".5" → 500 ms
+	ms, err = parseTimestampToMillis("1970-01-01 00:00:00.5")
 	require.NoError(t, err)
-	assert.Equal(t, int64(500_000), us)
+	assert.Equal(t, int64(500), ms)
 
-	// With 6-digit microseconds
-	us, err = parseTimestampToMicros("1970-01-01 00:00:00.123456")
+	// With more digits — first 3 kept, remainder truncated
+	ms, err = parseTimestampToMillis("1970-01-01 00:00:00.123456")
 	require.NoError(t, err)
-	assert.Equal(t, int64(123_456), us)
+	assert.Equal(t, int64(123), ms)
 
 	// Timestamp with time zone — " UTC" suffix must be ignored
-	us, err = parseTimestampToMicros("1970-01-01 00:00:01.000000 UTC")
+	ms, err = parseTimestampToMillis("1970-01-01 00:00:01.000 UTC")
 	require.NoError(t, err)
-	assert.Equal(t, int64(1_000_000), us)
+	assert.Equal(t, int64(1_000), ms)
 
 	// Timestamp with time zone — no fractional seconds, space+tz suffix
-	us, err = parseTimestampToMicros("1970-01-01 00:00:01 UTC")
+	ms, err = parseTimestampToMillis("1970-01-01 00:00:01 UTC")
 	require.NoError(t, err)
-	assert.Equal(t, int64(1_000_000), us)
+	assert.Equal(t, int64(1_000), ms)
 
 	// Timestamp with IANA time zone name suffix
-	us, err = parseTimestampToMicros("1970-01-01 00:00:00.000000 America/New_York")
+	ms, err = parseTimestampToMillis("1970-01-01 00:00:00.000 America/New_York")
 	require.NoError(t, err)
-	assert.Equal(t, int64(0), us)
+	assert.Equal(t, int64(0), ms)
 }
 
 // TestBuildRecordBatch_AllTypes exercises appendValue for every Athena type
@@ -303,16 +311,16 @@ func TestBuildRecordBatch_AllTypes(t *testing.T) {
 			"timestamp",
 			"1970-01-01 00:00:01.000000",
 			func(t *testing.T, col arrow.Array) {
-				require.Equal(t, arrow.FixedWidthTypes.Timestamp_us, col.DataType())
-				assert.EqualValues(t, 1_000_000, col.(*array.Timestamp).Value(0))
+				require.Equal(t, arrow.FixedWidthTypes.Timestamp_ms, col.DataType())
+				assert.EqualValues(t, 1_000, col.(*array.Timestamp).Value(0))
 			},
 		},
 		{
 			"timestamp with time zone",
 			"1970-01-01 00:00:01.000000 UTC",
 			func(t *testing.T, col arrow.Array) {
-				require.Equal(t, arrow.FixedWidthTypes.Timestamp_us, col.DataType())
-				assert.EqualValues(t, 1_000_000, col.(*array.Timestamp).Value(0))
+				require.Equal(t, arrow.FixedWidthTypes.Timestamp_ms, col.DataType())
+				assert.EqualValues(t, 1_000, col.(*array.Timestamp).Value(0))
 			},
 		},
 		{

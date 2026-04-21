@@ -46,6 +46,9 @@ func newRecordReader(alloc memory.Allocator, colInfo []types.ColumnInfo, rows []
 }
 
 // buildSchema converts Athena ColumnInfo slice to an Arrow schema.
+// Each field carries "ATHENA:type" metadata containing the raw Athena type string,
+// which allows consumers (e.g. dbt-xdbc) to reconstruct the original SQL type without
+// lossy Arrow→SQL inference.
 func buildSchema(colInfo []types.ColumnInfo) *arrow.Schema {
 	fields := make([]arrow.Field, len(colInfo))
 	for i, col := range colInfo {
@@ -53,10 +56,18 @@ func buildSchema(colInfo []types.ColumnInfo) *arrow.Schema {
 		if col.Name != nil {
 			name = *col.Name
 		}
+		typeStr := ""
+		if col.Type != nil {
+			typeStr = *col.Type
+		}
+		meta := arrow.MetadataFrom(map[string]string{
+			"ATHENA:type": typeStr,
+		})
 		fields[i] = arrow.Field{
 			Name:     name,
 			Type:     athenaColumnTypeToArrow(col),
 			Nullable: true,
+			Metadata: meta,
 		}
 	}
 	return arrow.NewSchema(fields, nil)
@@ -92,7 +103,7 @@ func athenaTypeStringToArrow(t string) arrow.DataType {
 	case "date":
 		return arrow.FixedWidthTypes.Date32
 	case "timestamp", "timestamp with time zone":
-		return arrow.FixedWidthTypes.Timestamp_us
+		return arrow.FixedWidthTypes.Timestamp_ms
 	case "varbinary", "binary":
 		return arrow.BinaryTypes.Binary
 	default:
@@ -189,11 +200,11 @@ func appendValue(bldr array.Builder, dt arrow.DataType, val string, isNull bool)
 		}
 		bldr.(*array.Date32Builder).Append(arrow.Date32(days))
 	case arrow.TIMESTAMP:
-		us, err := parseTimestampToMicros(val)
+		ms, err := parseTimestampToMillis(val)
 		if err != nil {
 			return err
 		}
-		bldr.(*array.TimestampBuilder).Append(arrow.Timestamp(us))
+		bldr.(*array.TimestampBuilder).Append(arrow.Timestamp(ms))
 	case arrow.BINARY:
 		bldr.(*array.BinaryBuilder).Append([]byte(val))
 	default:
@@ -242,12 +253,12 @@ func civilToDays(y, m, d int) int32 {
 	return int32(era*146097 + doe - 719468)
 }
 
-// parseTimestampToMicros parses an Athena timestamp string to microseconds since Unix epoch.
-// Athena timestamps use the format "YYYY-MM-DD HH:MM:SS[.ffffff][ <tz>]".
+// parseTimestampToMillis parses an Athena timestamp string to milliseconds since Unix epoch.
+// Athena timestamps use the format "YYYY-MM-DD HH:MM:SS[.fff][ <tz>]".
 // Timezone suffixes (e.g., " UTC", " America/New_York", "+00:00") are ignored — all
 // timestamps are treated as UTC, consistent with Athena's behaviour for TIMESTAMP
 // (which has no timezone) and TIMESTAMP WITH TIME ZONE (which Athena normalises to UTC).
-func parseTimestampToMicros(s string) (int64, error) {
+func parseTimestampToMillis(s string) (int64, error) {
 	if len(s) < 19 {
 		return 0, fmt.Errorf("unexpected timestamp format: %q", s)
 	}
@@ -276,7 +287,7 @@ func parseTimestampToMicros(s string) (int64, error) {
 		return 0, err
 	}
 
-	var fracMicros int64
+	var fracMillis int64
 	if len(s) > 19 && s[19] == '.' {
 		// Fractional seconds start at position 20.
 		frac := s[20:]
@@ -287,14 +298,14 @@ func parseTimestampToMicros(s string) (int64, error) {
 				break
 			}
 		}
-		// Pad or truncate to exactly 6 digits (microseconds).
-		for len(frac) < 6 {
+		// Pad or truncate to exactly 3 digits (milliseconds).
+		for len(frac) < 3 {
 			frac += "0"
 		}
-		if len(frac) > 6 {
-			frac = frac[:6]
+		if len(frac) > 3 {
+			frac = frac[:3]
 		}
-		fracMicros, err = strconv.ParseInt(frac, 10, 64)
+		fracMillis, err = strconv.ParseInt(frac, 10, 64)
 		if err != nil {
 			return 0, err
 		}
@@ -303,11 +314,11 @@ func parseTimestampToMicros(s string) (int64, error) {
 	// is intentionally ignored.
 
 	days := civilToDays(year, month, day)
-	totalMicros := int64(days)*86400*1_000_000 +
-		int64(hour)*3600*1_000_000 +
-		int64(min)*60*1_000_000 +
-		int64(sec)*1_000_000 +
-		fracMicros
+	totalMillis := int64(days)*86400*1_000 +
+		int64(hour)*3600*1_000 +
+		int64(min)*60*1_000 +
+		int64(sec)*1_000 +
+		fracMillis
 
-	return totalMicros, nil
+	return totalMillis, nil
 }
