@@ -254,7 +254,8 @@ func civilToDays(y, m, d int) int32 {
 }
 
 // parseTimestampToMillis parses an Athena timestamp string to milliseconds since Unix epoch.
-// Athena timestamps use the format "YYYY-MM-DD HH:MM:SS[.fff][ <tz>]".
+// Athena timestamps use the format "YYYY-MM-DD HH:MM:SS[.fraction][ <tz>]" where fraction
+// is a variable-length sequence of decimal digits; it is truncated to 3 digits (milliseconds).
 // Timezone suffixes (e.g., " UTC", " America/New_York", "+00:00") are ignored — all
 // timestamps are treated as UTC, consistent with Athena's behaviour for TIMESTAMP
 // (which has no timezone) and TIMESTAMP WITH TIME ZONE (which Athena normalises to UTC).

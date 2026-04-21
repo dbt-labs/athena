@@ -224,6 +224,7 @@ func (s *statementImpl) waitForQuery(ctx context.Context, execID *string) error 
 // pagingRecordReader is a lazy array.RecordReader that fetches one Athena result
 // page per Next() call, keeping only a single page in memory at a time.
 type pagingRecordReader struct {
+	// refCount is first to guarantee 64-bit alignment on 32-bit architectures.
 	refCount    atomic.Int64
 	alloc       memory.Allocator
 	schema      *arrow.Schema
@@ -257,10 +258,15 @@ func (r *pagingRecordReader) Retain() { r.refCount.Add(1) }
 
 func (r *pagingRecordReader) Release() {
 	if r.refCount.Add(-1) == 0 {
-		if r.current != nil {
-			r.current.Release()
-			r.current = nil
-		}
+		r.releaseCurrent()
+	}
+}
+
+// releaseCurrent releases the current batch and sets it to nil.
+func (r *pagingRecordReader) releaseCurrent() {
+	if r.current != nil {
+		r.current.Release()
+		r.current = nil
 	}
 }
 
@@ -279,10 +285,7 @@ func (r *pagingRecordReader) Record() arrow.RecordBatch { return r.RecordBatch()
 // each fetch exactly one additional Athena result page.
 func (r *pagingRecordReader) Next() bool {
 	// Release the previous batch before fetching the next.
-	if r.current != nil {
-		r.current.Release()
-		r.current = nil
-	}
+	r.releaseCurrent()
 
 	// On the first Next() call, offer the rows already fetched from page 1.
 	if !r.pendingDone {
