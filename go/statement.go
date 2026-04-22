@@ -20,12 +20,14 @@ package athena
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/adbc-drivers/driverbase-go/driverbase"
 	"github.com/apache/arrow-adbc/go/adbc"
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
+	"github.com/apache/arrow-go/v18/arrow/memory"
 	athenaSDK "github.com/aws/aws-sdk-go-v2/service/athena"
 	"github.com/aws/aws-sdk-go-v2/service/athena/types"
 )
@@ -76,8 +78,8 @@ func (s *statementImpl) ExecuteSchema(_ context.Context) (*arrow.Schema, error) 
 }
 
 // ExecuteQuery runs the SQL query on Athena, waits for completion, and returns
-// an array.RecordReader over the results. Results are accumulated as one Arrow
-// record batch per Athena result page to limit peak memory usage.
+// an array.RecordReader that streams results one Athena page at a time. Only
+// one page is held in memory at a time, so peak memory is bounded by page size.
 func (s *statementImpl) ExecuteQuery(ctx context.Context) (array.RecordReader, int64, error) {
 	if s.conn == nil {
 		return nil, -1, adbc.Error{
@@ -219,81 +221,159 @@ func (s *statementImpl) waitForQuery(ctx context.Context, execID *string) error 
 	}
 }
 
-// buildPagedRecordReader fetches Athena results page-by-page and builds one
-// Arrow record batch per page. All batches are accumulated before the
-// RecordReader is returned; the caller receives an array.RecordReader that
-// iterates over them one at a time. Memory usage scales with total result size
-// since all pages must be fetched before returning.
+// pagingRecordReader is a lazy array.RecordReader that fetches one Athena result
+// page per Next() call, keeping only a single page in memory at a time.
+type pagingRecordReader struct {
+	// refCount is first to guarantee 64-bit alignment on 32-bit architectures.
+	refCount    atomic.Int64
+	alloc       memory.Allocator
+	schema      *arrow.Schema
+	paginator   *athenaSDK.GetQueryResultsPaginator
+	ctx         context.Context
+	pending     []types.Row // data rows from the first page (header already stripped)
+	pendingDone bool        // true once pending has been offered as a batch
+	current     arrow.RecordBatch
+	err         error
+}
+
+func newPagingRecordReader(
+	ctx context.Context,
+	alloc memory.Allocator,
+	schema *arrow.Schema,
+	paginator *athenaSDK.GetQueryResultsPaginator,
+	firstPageRows []types.Row,
+) *pagingRecordReader {
+	r := &pagingRecordReader{
+		alloc:     alloc,
+		schema:    schema,
+		paginator: paginator,
+		ctx:       ctx,
+		pending:   firstPageRows,
+	}
+	r.refCount.Store(1)
+	return r
+}
+
+func (r *pagingRecordReader) Retain() { r.refCount.Add(1) }
+
+func (r *pagingRecordReader) Release() {
+	if r.refCount.Add(-1) == 0 {
+		r.releaseCurrent()
+	}
+}
+
+// releaseCurrent releases the current batch and sets it to nil.
+func (r *pagingRecordReader) releaseCurrent() {
+	if r.current != nil {
+		r.current.Release()
+		r.current = nil
+	}
+}
+
+func (r *pagingRecordReader) Schema() *arrow.Schema { return r.schema }
+
+func (r *pagingRecordReader) Err() error { return r.err }
+
+// RecordBatch returns the current batch (valid after a successful Next() call).
+func (r *pagingRecordReader) RecordBatch() arrow.RecordBatch { return r.current }
+
+// Record is the deprecated alias for RecordBatch, retained for interface compatibility.
+func (r *pagingRecordReader) Record() arrow.RecordBatch { return r.RecordBatch() }
+
+// Next advances to the next batch. The first call returns a batch built from
+// the rows pre-fetched during schema discovery (first page). Subsequent calls
+// each fetch exactly one additional Athena result page.
+func (r *pagingRecordReader) Next() bool {
+	// Release the previous batch before fetching the next.
+	r.releaseCurrent()
+
+	// On the first Next() call, offer the rows already fetched from page 1.
+	if !r.pendingDone {
+		r.pendingDone = true
+		if len(r.pending) > 0 {
+			batch, err := buildRecordBatch(r.alloc, r.schema, r.pending)
+			r.pending = nil
+			if err != nil {
+				r.err = err
+				return false
+			}
+			r.current = batch
+			return true
+		}
+		r.pending = nil
+		// First page had no data rows; fall through to subsequent pages.
+	}
+
+	// Fetch subsequent pages one at a time.
+	for r.paginator.HasMorePages() {
+		page, err := r.paginator.NextPage(r.ctx)
+		if err != nil {
+			r.err = adbc.Error{
+				Code: adbc.StatusIO,
+				Msg:  fmt.Sprintf("[athena] GetQueryResults failed: %v", err),
+			}
+			return false
+		}
+		if page.ResultSet == nil || len(page.ResultSet.Rows) == 0 {
+			continue
+		}
+		batch, err := buildRecordBatch(r.alloc, r.schema, page.ResultSet.Rows)
+		if err != nil {
+			r.err = err
+			return false
+		}
+		r.current = batch
+		return true
+	}
+	return false
+}
+
+// buildPagedRecordReader fetches the first Athena result page to obtain the schema,
+// then returns a pagingRecordReader that streams subsequent pages one at a time.
+// Only one page is held in memory at any point, avoiding OOM for large result sets.
 func (s *statementImpl) buildPagedRecordReader(ctx context.Context, execID *string) (array.RecordReader, error) {
 	input := &athenaSDK.GetQueryResultsInput{
 		QueryExecutionId: execID,
 	}
+	paginator := athenaSDK.NewGetQueryResultsPaginator(s.conn.athenaClient, input)
 
+	// Fetch pages until we find one with ResultSetMetadata to determine the schema.
 	var schema *arrow.Schema
-	var colInfo []types.ColumnInfo
-	var batches []arrow.Record
+	var firstPageRows []types.Row
 	firstPage := true
 
-	paginator := athenaSDK.NewGetQueryResultsPaginator(s.conn.athenaClient, input)
-	for paginator.HasMorePages() {
+	for schema == nil && paginator.HasMorePages() {
 		page, err := paginator.NextPage(ctx)
 		if err != nil {
-			for _, b := range batches {
-				b.Release()
-			}
 			return nil, adbc.Error{
 				Code: adbc.StatusIO,
 				Msg:  fmt.Sprintf("[athena] GetQueryResults failed: %v", err),
 			}
 		}
 
-		if page.ResultSet == nil {
-			continue
+		if page.ResultSet != nil && page.ResultSet.ResultSetMetadata != nil && len(page.ResultSet.ResultSetMetadata.ColumnInfo) > 0 {
+			schema = buildSchema(page.ResultSet.ResultSetMetadata.ColumnInfo)
 		}
 
-		rows := page.ResultSet.Rows
-		if firstPage {
-			if page.ResultSet.ResultSetMetadata != nil {
-				colInfo = page.ResultSet.ResultSetMetadata.ColumnInfo
+		if page.ResultSet != nil {
+			rows := page.ResultSet.Rows
+			if firstPage {
+				// The first row of the first page is a header row — skip it.
+				if len(rows) > 0 {
+					rows = rows[1:]
+				}
+				firstPage = false
 			}
-			// The first row of the first page is a header row — skip it.
-			if len(rows) > 0 {
-				rows = rows[1:]
-			}
-			schema = buildSchema(colInfo)
-			firstPage = false
+			firstPageRows = append(firstPageRows, rows...)
 		}
-
-		if len(rows) == 0 {
-			continue
-		}
-
-		batch, err := buildRecordBatch(s.conn.Alloc, schema, rows)
-		if err != nil {
-			for _, b := range batches {
-				b.Release()
-			}
-			return nil, err
-		}
-		batches = append(batches, batch)
 	}
 
 	if schema == nil {
-		// Query returned no metadata (e.g. DDL with no result set).
+		// No pages returned — DDL or empty result set.
 		schema = arrow.NewSchema(nil, nil)
 	}
 
-	// array.NewRecordReader retains its own reference to each record, so release
-	// the local references here. The caller is responsible for calling Release()
-	// on the returned RecordReader.
-	rr, err := array.NewRecordReader(schema, batches)
-	for _, b := range batches {
-		b.Release()
-	}
-	if err != nil {
-		return nil, err
-	}
-	return rr, nil
+	return newPagingRecordReader(ctx, s.conn.Alloc, schema, paginator, firstPageRows), nil
 }
 
 func (s *statementImpl) Bind(_ context.Context, _ arrow.Record) error {
