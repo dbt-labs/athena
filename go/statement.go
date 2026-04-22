@@ -292,6 +292,7 @@ func (r *pagingRecordReader) Next() bool {
 		r.pendingDone = true
 		if len(r.pending) > 0 {
 			batch, err := buildRecordBatch(r.alloc, r.schema, r.pending)
+			r.pending = nil
 			if err != nil {
 				r.err = err
 				return false
@@ -299,6 +300,7 @@ func (r *pagingRecordReader) Next() bool {
 			r.current = batch
 			return true
 		}
+		r.pending = nil
 		// First page had no data rows; fall through to subsequent pages.
 	}
 
@@ -335,11 +337,12 @@ func (s *statementImpl) buildPagedRecordReader(ctx context.Context, execID *stri
 	}
 	paginator := athenaSDK.NewGetQueryResultsPaginator(s.conn.athenaClient, input)
 
-	// Fetch the first page eagerly to determine the schema.
+	// Fetch pages until we find one with ResultSetMetadata to determine the schema.
 	var schema *arrow.Schema
 	var firstPageRows []types.Row
+	firstPage := true
 
-	if paginator.HasMorePages() {
+	for schema == nil && paginator.HasMorePages() {
 		page, err := paginator.NextPage(ctx)
 		if err != nil {
 			return nil, adbc.Error{
@@ -348,19 +351,20 @@ func (s *statementImpl) buildPagedRecordReader(ctx context.Context, execID *stri
 			}
 		}
 
-		var colInfo []types.ColumnInfo
-		if page.ResultSet != nil && page.ResultSet.ResultSetMetadata != nil {
-			colInfo = page.ResultSet.ResultSetMetadata.ColumnInfo
+		if page.ResultSet != nil && page.ResultSet.ResultSetMetadata != nil && len(page.ResultSet.ResultSetMetadata.ColumnInfo) > 0 {
+			schema = buildSchema(page.ResultSet.ResultSetMetadata.ColumnInfo)
 		}
-		schema = buildSchema(colInfo)
 
 		if page.ResultSet != nil {
 			rows := page.ResultSet.Rows
-			// The first row of the first page is a header row — skip it.
-			if len(rows) > 0 {
-				rows = rows[1:]
+			if firstPage {
+				// The first row of the first page is a header row — skip it.
+				if len(rows) > 0 {
+					rows = rows[1:]
+				}
+				firstPage = false
 			}
-			firstPageRows = rows
+			firstPageRows = append(firstPageRows, rows...)
 		}
 	}
 
