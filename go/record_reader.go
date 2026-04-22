@@ -47,8 +47,9 @@ func newRecordReader(alloc memory.Allocator, colInfo []types.ColumnInfo, rows []
 
 // buildSchema converts Athena ColumnInfo slice to an Arrow schema.
 // Each field carries "ATHENA:type" metadata containing the raw Athena type string,
-// which allows consumers (e.g. dbt-xdbc) to reconstruct the original SQL type without
-// lossy Arrow→SQL inference.
+// allowing consumers to reconstruct the original SQL type without lossy Arrow→SQL
+// inference. See https://github.com/apache/arrow-adbc/issues/3449 for a proposal
+// to standardize this metadata key across drivers.
 func buildSchema(colInfo []types.ColumnInfo) *arrow.Schema {
 	fields := make([]arrow.Field, len(colInfo))
 	for i, col := range colInfo {
