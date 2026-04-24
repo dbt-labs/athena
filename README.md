@@ -104,6 +104,17 @@ Required environment variables for integration tests:
 make vet
 ```
 
+## Support
+
+This project is provided **as-is**, without SLAs or guarantees of support.
+Maintenance is best-effort.
+
+- **Bugs / feature requests:** open a GitHub issue with a minimal reproduction.
+- **Questions / discussion:** use GitHub Discussions.
+- **Security vulnerabilities:** see [SECURITY.md](SECURITY.md) — report
+  privately, not via public issues.
+- **Contributing:** see [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## License
 
 Apache License 2.0 — see [LICENSE](LICENSE).
