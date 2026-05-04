@@ -59,9 +59,13 @@ const (
 )
 
 var infoVendorVersion string
+var driverVersion = "dev"
 
 func init() {
 	if info, ok := debug.ReadBuildInfo(); ok {
+		if info.Main.Version != "" && info.Main.Version != "(devel)" {
+			driverVersion = info.Main.Version
+		}
 		for _, dep := range info.Deps {
 			if dep.Path == "github.com/aws/aws-sdk-go-v2/service/athena" {
 				infoVendorVersion = fmt.Sprintf("aws-sdk-go-v2/service/athena %s", dep.Version)
