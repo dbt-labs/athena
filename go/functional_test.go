@@ -99,7 +99,7 @@ func newTestDB(t testing.TB, mock athenaClientAPI) *databaseImpl {
 		DatabaseImplBase: dbBase,
 		catalog:          "AwsDataCatalog",
 		schema:           "default",
-		s3StagingDir:     "s3://test-bucket/results/",
+		outputLocation:   "s3://test-bucket/results/",
 		authType:         AuthTypeDefault,
 		testClient:       mock,
 	}

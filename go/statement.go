@@ -146,9 +146,9 @@ func (s *statementImpl) startQuery(ctx context.Context) (*string, error) {
 			Database: nilIfEmpty(s.conn.schema),
 		},
 	}
-	if s.conn.db.s3StagingDir != "" {
+	if s.conn.db.outputLocation != "" {
 		input.ResultConfiguration = &types.ResultConfiguration{
-			OutputLocation: &s.conn.db.s3StagingDir,
+			OutputLocation: &s.conn.db.outputLocation,
 		}
 	}
 	if s.conn.db.workGroup != "" {

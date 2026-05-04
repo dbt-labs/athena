@@ -30,10 +30,10 @@ import (
 driver := athena.NewDriver(memory.DefaultAllocator)
 
 db, err := driver.NewDatabase(map[string]string{
-    athena.OptionRegion:        "us-east-1",
-    athena.OptionS3StagingDir:  "s3://your-bucket/athena-results/",
-    athena.OptionCatalog:       "AwsDataCatalog",  // optional, default: AwsDataCatalog
-    athena.OptionSchema:        "default",          // optional
+    athena.OptionRegion:         "us-east-1",
+    athena.OptionOutputLocation: "s3://your-bucket/athena-results/",
+    athena.OptionCatalog:        "AwsDataCatalog",  // optional, default: AwsDataCatalog
+    athena.OptionSchema:         "default",          // optional
 })
 
 conn, err := db.Open(context.Background())
@@ -93,7 +93,7 @@ Required environment variables for integration tests:
 | Variable                  | Description                                      |
 |---------------------------|--------------------------------------------------|
 | `AWS_DEFAULT_REGION`      | AWS region (e.g. `us-east-1`)                    |
-| `ATHENA_S3_STAGING_DIR`   | S3 output location (e.g. `s3://bucket/results/`) |
+| `ATHENA_OUTPUT_LOCATION`  | S3 output location (e.g. `s3://bucket/results/`) |
 | `AWS_ACCESS_KEY_ID`       | Optional — omit to use IAM role or `~/.aws/credentials` |
 | `AWS_SECRET_ACCESS_KEY`   | Optional                                         |
 | `AWS_SESSION_TOKEN`       | Optional                                         |
