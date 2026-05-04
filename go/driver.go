@@ -35,8 +35,8 @@ const (
 	OptionCatalog = "athena.catalog"
 	// OptionSchema is the default Glue database / dbt "schema".
 	OptionSchema = "athena.schema"
-	// OptionS3StagingDir is the S3 output location (s3://bucket/prefix/).
-	OptionS3StagingDir = "athena.s3_staging_dir"
+	// OptionOutputLocation is the S3 output location (s3://bucket/prefix/).
+	OptionOutputLocation = "athena.output_location"
 	// OptionWorkGroup is the Athena workgroup name.
 	OptionWorkGroup = "athena.work_group"
 	// OptionAuthType selects the AWS authentication method.

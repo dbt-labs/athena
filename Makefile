@@ -11,7 +11,7 @@ test-unit:
 	cd $(GO_DIR) && go test ./... -count=1
 
 # Run integration tests against real Athena.
-# Requires: ATHENA_S3_STAGING_DIR, and AWS credentials in the environment.
+# Requires: ATHENA_OUTPUT_LOCATION, and AWS credentials in the environment.
 test-integration:
 	cd $(GO_DIR) && ADBC_ATHENA_TESTS=1 go test ./... -run TestIntegration -v -count=1
 

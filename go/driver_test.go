@@ -58,12 +58,12 @@ func TestNewDatabase_WithOptions(t *testing.T) {
 	drv := athena.NewDriver(memory.DefaultAllocator)
 
 	db, err := drv.NewDatabase(map[string]string{
-		athena.OptionRegion:       "us-east-1",
-		athena.OptionCatalog:      "AwsDataCatalog",
-		athena.OptionSchema:       "default",
-		athena.OptionS3StagingDir: "s3://my-bucket/athena-results/",
-		athena.OptionWorkGroup:    "primary",
-		athena.OptionAuthType:     athena.AuthTypeDefault,
+		athena.OptionRegion:         "us-east-1",
+		athena.OptionCatalog:        "AwsDataCatalog",
+		athena.OptionSchema:         "default",
+		athena.OptionOutputLocation: "s3://my-bucket/athena-results/",
+		athena.OptionWorkGroup:      "primary",
+		athena.OptionAuthType:       athena.AuthTypeDefault,
 	})
 	require.NoError(t, err)
 	require.NotNil(t, db)
@@ -113,9 +113,9 @@ func TestAuthTypeAccessKey_MissingKey(t *testing.T) {
 	drv := athena.NewDriver(memory.DefaultAllocator)
 
 	db, err := drv.NewDatabase(map[string]string{
-		athena.OptionRegion:       "us-east-1",
-		athena.OptionS3StagingDir: "s3://bucket/prefix/",
-		athena.OptionAuthType:     athena.AuthTypeAccessKey,
+		athena.OptionRegion:         "us-east-1",
+		athena.OptionOutputLocation: "s3://bucket/prefix/",
+		athena.OptionAuthType:       athena.AuthTypeAccessKey,
 		// Missing access key ID and secret key
 	})
 	require.NoError(t, err)
@@ -130,9 +130,9 @@ func TestAuthTypeProfile_MissingProfileName(t *testing.T) {
 	drv := athena.NewDriver(memory.DefaultAllocator)
 
 	db, err := drv.NewDatabase(map[string]string{
-		athena.OptionRegion:       "us-east-1",
-		athena.OptionS3StagingDir: "s3://bucket/prefix/",
-		athena.OptionAuthType:     athena.AuthTypeProfile,
+		athena.OptionRegion:         "us-east-1",
+		athena.OptionOutputLocation: "s3://bucket/prefix/",
+		athena.OptionAuthType:       athena.AuthTypeProfile,
 		// Missing profile name
 	})
 	require.NoError(t, err)
@@ -152,7 +152,7 @@ func TestAllOptionConstants(t *testing.T) {
 	assert.Equal(t, "athena.region", athena.OptionRegion)
 	assert.Equal(t, "athena.catalog", athena.OptionCatalog)
 	assert.Equal(t, "athena.schema", athena.OptionSchema)
-	assert.Equal(t, "athena.s3_staging_dir", athena.OptionS3StagingDir)
+	assert.Equal(t, "athena.output_location", athena.OptionOutputLocation)
 	assert.Equal(t, "athena.work_group", athena.OptionWorkGroup)
 	assert.Equal(t, "athena.auth_type", athena.OptionAuthType)
 	assert.Equal(t, "athena.aws.access_key_id", athena.OptionAccessKeyID)
@@ -173,8 +173,8 @@ func integrationConn(t *testing.T) adbc.Connection {
 	if region == "" {
 		region = "us-east-1"
 	}
-	s3Dir := os.Getenv("ATHENA_S3_STAGING_DIR")
-	require.NotEmpty(t, s3Dir, "ATHENA_S3_STAGING_DIR must be set for integration tests")
+	outputLocation := os.Getenv("ATHENA_OUTPUT_LOCATION")
+	require.NotEmpty(t, outputLocation, "ATHENA_OUTPUT_LOCATION must be set for integration tests")
 
 	catalog := os.Getenv("ATHENA_CATALOG")
 	if catalog == "" {
@@ -186,11 +186,11 @@ func integrationConn(t *testing.T) adbc.Connection {
 	}
 
 	opts := map[string]string{
-		athena.OptionRegion:       region,
-		athena.OptionS3StagingDir: s3Dir,
-		athena.OptionCatalog:      catalog,
-		athena.OptionSchema:       schema,
-		athena.OptionAuthType:     athena.AuthTypeDefault,
+		athena.OptionRegion:         region,
+		athena.OptionOutputLocation: outputLocation,
+		athena.OptionCatalog:        catalog,
+		athena.OptionSchema:         schema,
+		athena.OptionAuthType:       athena.AuthTypeDefault,
 	}
 	if profile := os.Getenv("AWS_PROFILE"); profile != "" {
 		opts[athena.OptionAuthType]    = athena.AuthTypeProfile

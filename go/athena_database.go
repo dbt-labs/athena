@@ -32,11 +32,11 @@ import (
 type databaseImpl struct {
 	driverbase.DatabaseImplBase
 
-	region       string
-	catalog      string
-	schema       string
-	s3StagingDir string
-	workGroup    string
+	region         string
+	catalog        string
+	schema         string
+	outputLocation string
+	workGroup      string
 
 	authType     string
 	accessKeyID  string
@@ -135,8 +135,8 @@ func (d *databaseImpl) GetOption(key string) (string, error) {
 		return d.catalog, nil
 	case OptionSchema:
 		return d.schema, nil
-	case OptionS3StagingDir:
-		return d.s3StagingDir, nil
+	case OptionOutputLocation:
+		return d.outputLocation, nil
 	case OptionWorkGroup:
 		return d.workGroup, nil
 	case OptionAuthType:
@@ -171,8 +171,8 @@ func (d *databaseImpl) SetOption(key, value string) error {
 		d.catalog = value
 	case OptionSchema:
 		d.schema = value
-	case OptionS3StagingDir:
-		d.s3StagingDir = value
+	case OptionOutputLocation:
+		d.outputLocation = value
 	case OptionWorkGroup:
 		d.workGroup = value
 	case OptionAuthType:

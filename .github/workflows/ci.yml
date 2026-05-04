@@ -66,7 +66,7 @@ jobs:
   #   AWS_ACCESS_KEY_ID       — IAM key with Athena + S3 permissions
   #   AWS_SECRET_ACCESS_KEY   — corresponding secret
   #   AWS_REGION              — e.g. us-east-1
-  #   ATHENA_S3_STAGING_DIR   — e.g. s3://my-bucket/athena-results/
+  #   ATHENA_OUTPUT_LOCATION  — e.g. s3://my-bucket/athena-results/
   # ──────────────────────────────────────────────────────────────────────────
   integration:
     name: Integration Tests
@@ -94,5 +94,5 @@ jobs:
         env:
           ADBC_ATHENA_TESTS: "1"
           AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
-          ATHENA_S3_STAGING_DIR: ${{ secrets.ATHENA_S3_STAGING_DIR }}
+          ATHENA_OUTPUT_LOCATION: ${{ secrets.ATHENA_OUTPUT_LOCATION }}
         run: go test -race -count=1 -run TestIntegration ./...
