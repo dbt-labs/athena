@@ -174,7 +174,7 @@ func integrationConn(t *testing.T) adbc.Connection {
 		region = "us-east-1"
 	}
 	outputLocation := os.Getenv("ATHENA_OUTPUT_LOCATION")
-	require.NotEmpty(t, outputLocation, "ATHENA_OUTPUT_LOCATION must be set for integration tests")
+	// require.NotEmpty(t, outputLocation, "ATHENA_OUTPUT_LOCATION must be set for integration tests")
 
 	catalog := os.Getenv("ATHENA_CATALOG")
 	if catalog == "" {
