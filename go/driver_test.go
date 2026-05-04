@@ -246,7 +246,7 @@ SELECT
   CAST(3.14              AS DOUBLE)    AS double_col,
   true                                 AS bool_col,
   DATE        '2024-01-15'             AS date_col,
-  TIMESTAMP   '2024-01-15 12:30:00'   AS ts_col,
+  TIMESTAMP   '2024-01-15 12:30:00.123' AS ts_col,
   ARRAY[1, 2, 3]                       AS array_col,
   MAP(ARRAY['k'], ARRAY['v'])          AS map_col
 `
@@ -275,6 +275,8 @@ SELECT
 	assert.EqualValues(t, 7, rec.Column(2).(*array.Int32).Value(0))
 	assert.InDelta(t, 3.14, rec.Column(3).(*array.Float64).Value(0), 1e-9)
 	assert.True(t, rec.Column(4).(*array.Boolean).Value(0))
+	assert.EqualValues(t, arrow.Date32(19737), rec.Column(5).(*array.Date32).Value(0), "date_col: days since epoch")
+	assert.EqualValues(t, arrow.Timestamp(1705321800123), rec.Column(6).(*array.Timestamp).Value(0), "ts_col: millis since epoch")
 
 	// Nested columns must be non-empty strings.
 	assert.NotEmpty(t, rec.Column(7).(*array.String).Value(0), "array_col should be non-empty")
