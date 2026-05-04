@@ -27,6 +27,9 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	athenaSDK "github.com/aws/aws-sdk-go-v2/service/athena"
+
+	awsmiddleware "github.com/aws/aws-sdk-go-v2/aws/middleware"
+	"github.com/aws/smithy-go/middleware"
 )
 
 type databaseImpl struct {
@@ -58,7 +61,11 @@ func (d *databaseImpl) Open(ctx context.Context) (adbc.Connection, error) {
 		if err != nil {
 			return nil, err
 		}
-		client = athenaSDK.NewFromConfig(cfg)
+		client = athenaSDK.NewFromConfig(cfg, func(o *athenaSDK.Options) {
+			o.APIOptions = append(o.APIOptions, func(stack *middleware.Stack) error {
+				return awsmiddleware.AddUserAgentKeyValue("athena-adbc-go", driverVersion)(stack)
+			})
+		})
 	}
 
 	conn := &connectionImpl{
