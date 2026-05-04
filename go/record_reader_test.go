@@ -48,8 +48,8 @@ func TestAthenaTypeStringToArrow(t *testing.T) {
 		{"real", arrow.PrimitiveTypes.Float32},
 		{"boolean", arrow.FixedWidthTypes.Boolean},
 		{"date", arrow.FixedWidthTypes.Date32},
-		{"timestamp", arrow.FixedWidthTypes.Timestamp_ms},
-		{"timestamp with time zone", arrow.FixedWidthTypes.Timestamp_ms},
+		{"timestamp", arrow.FixedWidthTypes.Timestamp_us},
+		{"timestamp with time zone", arrow.FixedWidthTypes.Timestamp_us},
 		{"varbinary", arrow.BinaryTypes.Binary},
 		{"binary", arrow.BinaryTypes.Binary},
 		{"decimal(10,2)", arrow.BinaryTypes.String},
@@ -311,7 +311,7 @@ func TestBuildRecordBatch_AllTypes(t *testing.T) {
 			"timestamp",
 			"1970-01-01 00:00:01.000000",
 			func(t *testing.T, col arrow.Array) {
-				require.Equal(t, arrow.FixedWidthTypes.Timestamp_ms, col.DataType())
+				require.Equal(t, arrow.FixedWidthTypes.Timestamp_us, col.DataType())
 				assert.EqualValues(t, 1_000, col.(*array.Timestamp).Value(0))
 			},
 		},
@@ -319,7 +319,7 @@ func TestBuildRecordBatch_AllTypes(t *testing.T) {
 			"timestamp with time zone",
 			"1970-01-01 00:00:01.000000 UTC",
 			func(t *testing.T, col arrow.Array) {
-				require.Equal(t, arrow.FixedWidthTypes.Timestamp_ms, col.DataType())
+				require.Equal(t, arrow.FixedWidthTypes.Timestamp_us, col.DataType())
 				assert.EqualValues(t, 1_000, col.(*array.Timestamp).Value(0))
 			},
 		},

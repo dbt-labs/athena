@@ -104,7 +104,7 @@ func athenaTypeStringToArrow(t string) arrow.DataType {
 	case "date":
 		return arrow.FixedWidthTypes.Date32
 	case "timestamp", "timestamp with time zone":
-		return arrow.FixedWidthTypes.Timestamp_ms
+		return arrow.FixedWidthTypes.Timestamp_us
 	case "varbinary", "binary":
 		return arrow.BinaryTypes.Binary
 	default:
