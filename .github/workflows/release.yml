@@ -1,16 +1,17 @@
 # **what?**
 # Builds the Athena ADBC shared library for all four supported platforms,
-# packages each binary into the tarball format expected by redist-adbc-driver-gh.yml,
-# and publishes a GitHub Release so dbt-labs/fs can redistribute it to the CDN.
+# packages each binary into a per-platform tarball, and publishes a
+# GitHub Release containing the tarballs and a manifest.yaml.
 
 # **why?**
-# dbt-labs/fs consumes drivers via redist-adbc-driver-gh.yml, which downloads
-# pre-built binaries from GitHub Releases.  This workflow is the upstream
-# counterpart: it produces those releases.
+# Releases are the canonical distribution channel for the driver.  Anyone
+# integrating it (driver managers, package builders, internal CDNs) can
+# consume a release tarball directly from this repo's Releases page.
 
 # **when?**
 # On a pushed `v*` tag (e.g. v0.1.0).  Use workflow_dispatch for dry-runs;
 # the release-creation step is skipped unless the trigger is an actual tag.
+# See RELEASE.md for the versioning and tag conventions.
 
 name: "Release"
 run-name: ${{ startsWith(github.ref, 'refs/tags/') && format('Release {0}', github.ref_name) || 'Release (dry-run)' }}
