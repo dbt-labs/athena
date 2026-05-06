@@ -9,7 +9,8 @@
 # counterpart: it produces those releases.
 
 # **when?**
-# On a pushed `v*` tag (e.g. v0.1.0).  Use workflow_dispatch for dry-runs.
+# On a pushed `v*` tag (e.g. v0.1.0).  Use workflow_dispatch for dry-runs;
+# the release-creation step is skipped unless the trigger is an actual tag.
 
 name: "Release"
 run-name: ${{ startsWith(github.ref, 'refs/tags/') && format('Release {0}', github.ref_name) || 'Release (dry-run)' }}
@@ -27,8 +28,43 @@ defaults:
     shell: bash --noprofile --norc -euo pipefail {0}
 
 jobs:
+  determine-version:
+    name: "Determine Version"
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.VERSION }}
+      tag: ${{ steps.v.outputs.TAG }}
+      is_release: ${{ steps.v.outputs.IS_RELEASE }}
+    steps:
+      - name: "Compute version from ref"
+        id: v
+        # Pattern follows adbc-drivers/clickhouse and dbt-labs/adbc-spark:
+        # parse the tag from `github.ref` on a tag push; fall back to a
+        # synthetic version on workflow_dispatch so we never reuse a branch
+        # name (which may contain `/`) in the archive filename.
+        run: |
+          REF="${{ github.ref }}"
+          if [[ "$REF" == refs/tags/v* ]]; then
+            TAG="${REF#refs/tags/}"
+            VERSION="${TAG#v}"
+            IS_RELEASE=true
+          else
+            VERSION="0.0.0-dryrun.${{ github.run_id }}"
+            TAG="v${VERSION}"
+            IS_RELEASE=false
+          fi
+          echo "Tag:        ${TAG}"
+          echo "Version:    ${VERSION}"
+          echo "IsRelease:  ${IS_RELEASE}"
+          {
+            echo "TAG=${TAG}"
+            echo "VERSION=${VERSION}"
+            echo "IS_RELEASE=${IS_RELEASE}"
+          } >> "$GITHUB_OUTPUT"
+
   build:
     name: "Build/${{ matrix.platform }}_${{ matrix.arch }}"
+    needs: determine-version
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -41,6 +77,7 @@ jobs:
 
     env:
       CGO_ENABLED: "1"
+      VERSION: ${{ needs.determine-version.outputs.version }}
 
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # actions/checkout@v4
@@ -50,20 +87,18 @@ jobs:
           go-version-file: go/go.mod
           cache-dependency-path: go/go.sum
 
-      - name: Install C toolchain (Linux)
+      - name: "Install C toolchain (Linux)"
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y gcc
 
-      - name: Add MinGW to PATH (Windows)
+      - name: "Add MinGW to PATH (Windows)"
         if: runner.os == 'Windows'
-        shell: bash
         run: echo "C:/msys64/mingw64/bin" >> "$GITHUB_PATH"
 
-      - name: Build shared library
+      - name: "Build shared library"
         working-directory: go/pkg
-        shell: bash
         run: |
           EXT="${{ matrix.ext }}"
           go build -buildvcs=true -tags driverlib,netgo \
@@ -71,11 +106,8 @@ jobs:
             ./athena
           rm -f libadbc_driver_athena.h
 
-      - name: Package
-        shell: bash
+      - name: "Package"
         run: |
-          TAG="${{ github.ref_name }}"
-          VERSION="${TAG#v}"
           PLATFORM="${{ matrix.platform }}_${{ matrix.arch }}"
           EXT="${{ matrix.ext }}"
           ARCHIVE="athena_${PLATFORM}_v${VERSION}.tar.gz"
@@ -90,7 +122,10 @@ jobs:
   release:
     name: "Publish GitHub Release"
     runs-on: ubuntu-latest
-    needs: build
+    needs: [determine-version, build]
+    # Only create a real release on a tag push.  workflow_dispatch runs still
+    # produce all artifacts (visible on the run page) but skip release upload.
+    if: needs.determine-version.outputs.is_release == 'true'
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # actions/download-artifact@v4
         with:
@@ -98,7 +133,7 @@ jobs:
           merge-multiple: true
           path: packages
 
-      - name: Create manifest.yaml
+      - name: "Create manifest.yaml"
         run: |
           cat > packages/manifest.yaml << 'EOF'
           drivers:
@@ -109,21 +144,14 @@ jobs:
       - name: "[DEBUG] List packages"
         run: ls -la packages/
 
-      - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: "Create GitHub Release"
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="${{ github.ref_name }}"
+          TAG="${{ needs.determine-version.outputs.tag }}"
           gh release create "$TAG" \
             --repo "${{ github.repository }}" \
             --title "Release ${TAG}" \
             --generate-notes \
             packages/*.tar.gz \
             packages/manifest.yaml
-
-      - name: "[DRY-RUN] Show release artifacts"
-        if: "!startsWith(github.ref, 'refs/tags/')"
-        run: |
-          echo "Would release: ${{ github.ref_name }}"
-          ls -la packages/
