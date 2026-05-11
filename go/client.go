@@ -21,6 +21,7 @@ import (
 	"context"
 
 	athenaSDK "github.com/aws/aws-sdk-go-v2/service/athena"
+	glueSDK "github.com/aws/aws-sdk-go-v2/service/glue"
 )
 
 // athenaClientAPI abstracts the AWS Athena SDK client to allow injection of
@@ -39,4 +40,10 @@ type athenaClientAPI interface {
 	StopQueryExecution(ctx context.Context, params *athenaSDK.StopQueryExecutionInput, optFns ...func(*athenaSDK.Options)) (*athenaSDK.StopQueryExecutionOutput, error)
 	GetQueryExecution(ctx context.Context, params *athenaSDK.GetQueryExecutionInput, optFns ...func(*athenaSDK.Options)) (*athenaSDK.GetQueryExecutionOutput, error)
 	GetQueryResults(ctx context.Context, params *athenaSDK.GetQueryResultsInput, optFns ...func(*athenaSDK.Options)) (*athenaSDK.GetQueryResultsOutput, error)
+}
+
+// glueClientAPI abstracts the AWS Glue SDK client to allow injection of
+// test doubles. *glueSDK.Client satisfies this interface implicitly.
+type glueClientAPI interface {
+	GetCatalogs(ctx context.Context, params *glueSDK.GetCatalogsInput, optFns ...func(*glueSDK.Options)) (*glueSDK.GetCatalogsOutput, error)
 }

@@ -282,3 +282,27 @@ SELECT
 	assert.NotEmpty(t, rec.Column(7).(*array.String).Value(0), "array_col should be non-empty")
 	assert.NotEmpty(t, rec.Column(8).(*array.String).Value(0), "map_col should be non-empty")
 }
+
+func TestIntegration_ListCatalogs(t *testing.T) {
+	conn := integrationConn(t)
+
+	rdr, err := conn.GetObjects(
+		context.Background(),
+		adbc.ObjectDepthCatalogs,
+		nil, nil, nil, nil, nil,
+	)
+	require.NoError(t, err)
+	defer rdr.Release()
+
+	var catalogs []string
+	for rdr.Next() {
+		rec := rdr.RecordBatch()
+		col := rec.Column(0).(*array.String)
+		for i := 0; i < col.Len(); i++ {
+			catalogs = append(catalogs, col.Value(i))
+		}
+	}
+	require.NoError(t, rdr.Err())
+
+	assert.Contains(t, catalogs, "AwsDataCatalog")
+}

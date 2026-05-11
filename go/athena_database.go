@@ -27,6 +27,7 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	athenaSDK "github.com/aws/aws-sdk-go-v2/service/athena"
+	glueSDK "github.com/aws/aws-sdk-go-v2/service/glue"
 
 	awsmiddleware "github.com/aws/aws-sdk-go-v2/aws/middleware"
 	"github.com/aws/smithy-go/middleware"
@@ -47,30 +48,38 @@ type databaseImpl struct {
 	sessionToken string
 	profileName  string
 
-	// testClient is non-nil only during testing. When set, Open uses it
-	// directly instead of constructing a real AWS SDK client.
-	testClient athenaClientAPI
+	// testAthenaClient and testGlueClient are non-nil only during testing. 
+	// When set, Open uses them directly instead of constructing real AWS SDK clients.
+	testAthenaClient athenaClientAPI
+	testGlueClient glueClientAPI
 }
 
 func (d *databaseImpl) Open(ctx context.Context) (adbc.Connection, error) {
-	var client athenaClientAPI
-	if d.testClient != nil {
-		client = d.testClient
+	var athenaClient athenaClientAPI
+	var glueClient glueClientAPI
+	if d.testAthenaClient != nil {
+		athenaClient = d.testAthenaClient
+		glueClient = d.testGlueClient
 	} else {
 		cfg, err := d.buildAWSConfig(ctx)
 		if err != nil {
 			return nil, err
 		}
-		client = athenaSDK.NewFromConfig(cfg, func(o *athenaSDK.Options) {
-			o.APIOptions = append(o.APIOptions, func(stack *middleware.Stack) error {
-				return awsmiddleware.AddUserAgentKeyValue("athena-adbc-go", driverVersion)(stack)
-			})
+		userAgentMiddleware := func(stack *middleware.Stack) error {
+			return awsmiddleware.AddUserAgentKeyValue("athena-adbc-go", driverVersion)(stack)
+		}
+		athenaClient = athenaSDK.NewFromConfig(cfg, func(o *athenaSDK.Options) {
+			o.APIOptions = append(o.APIOptions, userAgentMiddleware)
+		})
+		glueClient = glueSDK.NewFromConfig(cfg, func(o *glueSDK.Options) {
+			o.APIOptions = append(o.APIOptions, userAgentMiddleware)
 		})
 	}
 
 	conn := &connectionImpl{
 		ConnectionImplBase: driverbase.NewConnectionImplBase(&d.DatabaseImplBase),
-		athenaClient:       client,
+		athenaClient:       athenaClient,
+		glueClient:         glueClient,
 		db:                 d,
 		catalog:            d.catalog,
 		schema:             d.schema,
