@@ -19,18 +19,23 @@ package athena
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/adbc-drivers/driverbase-go/driverbase"
 	"github.com/apache/arrow-adbc/go/adbc"
 	"github.com/apache/arrow-go/v18/arrow"
 	athenaSDK "github.com/aws/aws-sdk-go-v2/service/athena"
+	"github.com/aws/aws-sdk-go-v2/service/athena/types"
+	glueSDK "github.com/aws/aws-sdk-go-v2/service/glue"
 )
 
 type connectionImpl struct {
 	driverbase.ConnectionImplBase
 
 	athenaClient athenaClientAPI
+	glueClient   glueClientAPI
 	db           *databaseImpl
 
 	// catalog and schema are per-connection copies of the database defaults,
@@ -138,6 +143,21 @@ func (c *connectionImpl) GetCatalogs(ctx context.Context, catalogFilter *string)
 		return []string{c.catalog}, nil
 	}
 
+	catalogs, err := c.listAthenaCatalogs(ctx, catalogFilter)
+	if err != nil {
+		return nil, err
+	}
+
+	glueCatalogs, err := c.listGlueCatalogs(ctx, catalogFilter)
+	if err != nil {
+		return nil, err
+	}
+	catalogs = append(catalogs, glueCatalogs...)
+
+	return catalogs, nil
+}
+
+func (c *connectionImpl) listAthenaCatalogs(ctx context.Context, catalogFilter *string) ([]string, error) {
 	listInput := &athenaSDK.ListDataCatalogsInput{}
 	paginator := athenaSDK.NewListDataCatalogsPaginator(c.athenaClient, listInput)
 
@@ -163,6 +183,33 @@ func (c *connectionImpl) GetCatalogs(ctx context.Context, catalogFilter *string)
 	return catalogs, nil
 }
 
+func (c *connectionImpl) listGlueCatalogs(ctx context.Context, catalogFilter *string) ([]string, error) {
+	glueInput := &glueSDK.GetCatalogsInput{Recursive: true}
+	glueOut, err := c.glueClient.GetCatalogs(ctx, glueInput)
+	if err != nil {
+		return nil, adbc.Error{
+			Code: adbc.StatusIO,
+			Msg:  fmt.Sprintf("Glue GetCatalogs failed: %v", err),
+		}
+	}
+
+	var catalogs []string
+	for _, cat := range glueOut.CatalogList {
+		if cat.CatalogId == nil {
+			continue
+		}
+		name := *cat.CatalogId
+		if _, after, ok := strings.Cut(name, ":"); ok {
+			name = after
+		}
+		if catalogFilter != nil && *catalogFilter != "" && name != *catalogFilter {
+			continue
+		}
+		catalogs = append(catalogs, name)
+	}
+	return catalogs, nil
+}
+
 func (c *connectionImpl) GetDBSchemasForCatalog(ctx context.Context, catalog string, schemaFilter *string) ([]string, error) {
 	input := &athenaSDK.ListDatabasesInput{
 		CatalogName: &catalog,
@@ -173,6 +220,10 @@ func (c *connectionImpl) GetDBSchemasForCatalog(ctx context.Context, catalog str
 	for paginator.HasMorePages() {
 		page, err := paginator.NextPage(ctx)
 		if err != nil {
+			var metadataErr *types.MetadataException
+			if errors.As(err, &metadataErr) {
+				return nil, nil
+			}
 			return nil, adbc.Error{
 				Code: adbc.StatusIO,
 				Msg:  fmt.Sprintf("ListDatabases failed: %v", err),
