@@ -21,6 +21,7 @@ import (
 	"context"
 
 	athenaSDK "github.com/aws/aws-sdk-go-v2/service/athena"
+	glueSDK "github.com/aws/aws-sdk-go-v2/service/glue"
 )
 
 // athenaClientAPI abstracts the AWS Athena SDK client to allow injection of
@@ -31,7 +32,10 @@ import (
 // superset of all of them, so any value of this type can be passed directly
 // to those constructors.
 type athenaClientAPI interface {
+	GetDatabase(ctx context.Context, params *athenaSDK.GetDatabaseInput, optFns ...func(*athenaSDK.Options)) (*athenaSDK.GetDatabaseOutput, error)
+	GetDataCatalog(ctx context.Context, params *athenaSDK.GetDataCatalogInput, optFns ...func(*athenaSDK.Options)) (*athenaSDK.GetDataCatalogOutput, error)
 	GetTableMetadata(ctx context.Context, params *athenaSDK.GetTableMetadataInput, optFns ...func(*athenaSDK.Options)) (*athenaSDK.GetTableMetadataOutput, error)
+	GetWorkGroup(ctx context.Context, params *athenaSDK.GetWorkGroupInput, optFns ...func(*athenaSDK.Options)) (*athenaSDK.GetWorkGroupOutput, error)
 	ListDataCatalogs(ctx context.Context, params *athenaSDK.ListDataCatalogsInput, optFns ...func(*athenaSDK.Options)) (*athenaSDK.ListDataCatalogsOutput, error)
 	ListDatabases(ctx context.Context, params *athenaSDK.ListDatabasesInput, optFns ...func(*athenaSDK.Options)) (*athenaSDK.ListDatabasesOutput, error)
 	ListTableMetadata(ctx context.Context, params *athenaSDK.ListTableMetadataInput, optFns ...func(*athenaSDK.Options)) (*athenaSDK.ListTableMetadataOutput, error)
@@ -39,4 +43,11 @@ type athenaClientAPI interface {
 	StopQueryExecution(ctx context.Context, params *athenaSDK.StopQueryExecutionInput, optFns ...func(*athenaSDK.Options)) (*athenaSDK.StopQueryExecutionOutput, error)
 	GetQueryExecution(ctx context.Context, params *athenaSDK.GetQueryExecutionInput, optFns ...func(*athenaSDK.Options)) (*athenaSDK.GetQueryExecutionOutput, error)
 	GetQueryResults(ctx context.Context, params *athenaSDK.GetQueryResultsInput, optFns ...func(*athenaSDK.Options)) (*athenaSDK.GetQueryResultsOutput, error)
+}
+
+// glueClientAPI abstracts the AWS Glue SDK client to allow injection of
+// test doubles. *glueSDK.Client satisfies this interface implicitly.
+type glueClientAPI interface {
+	GetCatalog(ctx context.Context, params *glueSDK.GetCatalogInput, optFns ...func(*glueSDK.Options)) (*glueSDK.GetCatalogOutput, error)
+	GetCatalogs(ctx context.Context, params *glueSDK.GetCatalogsInput, optFns ...func(*glueSDK.Options)) (*glueSDK.GetCatalogsOutput, error)
 }
