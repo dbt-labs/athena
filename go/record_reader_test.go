@@ -48,12 +48,21 @@ func TestAthenaTypeStringToArrow(t *testing.T) {
 		{"real", arrow.PrimitiveTypes.Float32},
 		{"boolean", arrow.FixedWidthTypes.Boolean},
 		{"date", arrow.FixedWidthTypes.Date32},
-		{"timestamp", arrow.FixedWidthTypes.Timestamp_us},
-		{"timestamp with time zone", arrow.FixedWidthTypes.Timestamp_us},
+		{"timestamp", &arrow.TimestampType{Unit: arrow.Nanosecond}},
+		{"timestamp with time zone", &arrow.TimestampType{Unit: arrow.Nanosecond, TimeZone: "UTC"}},
 		{"varbinary", arrow.BinaryTypes.Binary},
 		{"binary", arrow.BinaryTypes.Binary},
-		{"decimal(10,2)", arrow.BinaryTypes.String},
-		{"array<int>", arrow.BinaryTypes.String},
+		{"time", arrow.FixedWidthTypes.Time64us},
+		{"time with time zone", arrow.FixedWidthTypes.Time64us},
+		{"interval day to second", arrow.FixedWidthTypes.DayTimeInterval},
+		{"interval year to month", arrow.FixedWidthTypes.MonthInterval},
+		{"hyperloglog", arrow.BinaryTypes.Binary},
+		{"p4hyperloglog", arrow.BinaryTypes.Binary},
+		{"setdigest", arrow.BinaryTypes.Binary},
+		{"qdigest", arrow.BinaryTypes.Binary},
+		{"tdigest", arrow.BinaryTypes.Binary},
+		{"decimal", arrow.BinaryTypes.String},
+		{"array", arrow.BinaryTypes.String},
 		{"unknown_type", arrow.BinaryTypes.String},
 	}
 
@@ -165,41 +174,56 @@ func TestParseDateToDays(t *testing.T) {
 	assert.Equal(t, int32(10957), days)
 }
 
-func TestParseTimestampToMillis(t *testing.T) {
-	// 1970-01-01 00:00:00 = 0 milliseconds
-	ms, err := parseTimestampToMillis("1970-01-01 00:00:00")
+func TestParseTimestampToNanos(t *testing.T) {
+	// 1970-01-01 00:00:00 = 0 nanoseconds
+	ns, err := parseTimestampToNanos("1970-01-01 00:00:00")
 	require.NoError(t, err)
-	assert.Equal(t, int64(0), ms)
+	assert.Equal(t, int64(0), ns)
 
-	// 1970-01-01 00:00:01 = 1_000 milliseconds
-	ms, err = parseTimestampToMillis("1970-01-01 00:00:01")
+	// 1970-01-01 00:00:01 = 1_000_000_000 nanoseconds
+	ns, err = parseTimestampToNanos("1970-01-01 00:00:01")
 	require.NoError(t, err)
-	assert.Equal(t, int64(1_000), ms)
+	assert.Equal(t, int64(1_000_000_000), ns)
 
-	// With fractional seconds — ".5" → 500 ms
-	ms, err = parseTimestampToMillis("1970-01-01 00:00:00.5")
+	// With fractional seconds — ".5" → 500_000_000 ns
+	ns, err = parseTimestampToNanos("1970-01-01 00:00:00.5")
 	require.NoError(t, err)
-	assert.Equal(t, int64(500), ms)
+	assert.Equal(t, int64(500_000_000), ns)
 
-	// With more digits — first 3 kept, remainder truncated
-	ms, err = parseTimestampToMillis("1970-01-01 00:00:00.123456")
+	// Millisecond precision — ".123" → 123_000_000 ns
+	ns, err = parseTimestampToNanos("1970-01-01 00:00:00.123")
 	require.NoError(t, err)
-	assert.Equal(t, int64(123), ms)
+	assert.Equal(t, int64(123_000_000), ns)
+
+	// Microsecond precision — ".123456" → 123_456_000 ns
+	ns, err = parseTimestampToNanos("1970-01-01 00:00:00.123456")
+	require.NoError(t, err)
+	assert.Equal(t, int64(123_456_000), ns)
+
+	// Nanosecond precision — full 9 digits preserved
+	ns, err = parseTimestampToNanos("1970-01-01 00:00:00.123456789")
+	require.NoError(t, err)
+	assert.Equal(t, int64(123_456_789), ns)
 
 	// Timestamp with time zone — " UTC" suffix must be ignored
-	ms, err = parseTimestampToMillis("1970-01-01 00:00:01.000 UTC")
+	ns, err = parseTimestampToNanos("1970-01-01 00:00:01.000000000 UTC")
 	require.NoError(t, err)
-	assert.Equal(t, int64(1_000), ms)
+	assert.Equal(t, int64(1_000_000_000), ns)
 
 	// Timestamp with time zone — no fractional seconds, space+tz suffix
-	ms, err = parseTimestampToMillis("1970-01-01 00:00:01 UTC")
+	ns, err = parseTimestampToNanos("1970-01-01 00:00:01 UTC")
 	require.NoError(t, err)
-	assert.Equal(t, int64(1_000), ms)
+	assert.Equal(t, int64(1_000_000_000), ns)
 
-	// Timestamp with IANA time zone name suffix
-	ms, err = parseTimestampToMillis("1970-01-01 00:00:00.000 America/New_York")
+	// Timestamp with IANA time zone name suffix — midnight Eastern = 05:00 UTC
+	ns, err = parseTimestampToNanos("1970-01-01 00:00:00.000000000 America/New_York")
 	require.NoError(t, err)
-	assert.Equal(t, int64(0), ms)
+	assert.Equal(t, int64(5*3600*1_000_000_000), ns)
+
+	// Timestamp with time zone offset — midnight in +03:45 = previous day 20:15 UTC
+	ns, err = parseTimestampToNanos("1970-01-01 00:00:00.000000000 +03:45")
+	require.NoError(t, err)
+	assert.Equal(t, int64(-(3*3600+45*60)*1_000_000_000), ns)
 }
 
 // TestBuildRecordBatch_AllTypes exercises appendValue for every Athena type
@@ -309,23 +333,72 @@ func TestBuildRecordBatch_AllTypes(t *testing.T) {
 		},
 		{
 			"timestamp",
-			"1970-01-01 00:00:01.000000",
+			"1970-01-01 00:00:01",
 			func(t *testing.T, col arrow.Array) {
-				require.Equal(t, arrow.FixedWidthTypes.Timestamp_us, col.DataType())
-				assert.EqualValues(t, 1_000, col.(*array.Timestamp).Value(0))
+				dt := &arrow.TimestampType{Unit: arrow.Nanosecond}
+				require.Equal(t, dt, col.DataType())
+				assert.EqualValues(t, 1_000_000_000, col.(*array.Timestamp).Value(0))
+			},
+		},
+		{
+			"timestamp",
+			"1970-01-01 00:00:01.123",
+			func(t *testing.T, col arrow.Array) {
+				dt := &arrow.TimestampType{Unit: arrow.Nanosecond}
+				require.Equal(t, dt, col.DataType())
+				assert.EqualValues(t, 1_123_000_000, col.(*array.Timestamp).Value(0))
+			},
+		},
+		{
+			"timestamp",
+			"1970-01-01 00:00:01.123456",
+			func(t *testing.T, col arrow.Array) {
+				dt := &arrow.TimestampType{Unit: arrow.Nanosecond}
+				require.Equal(t, dt, col.DataType())
+				assert.EqualValues(t, 1_123_456_000, col.(*array.Timestamp).Value(0))
+			},
+		},
+		{
+			"timestamp",
+			"1970-01-01 00:00:01.123456789",
+			func(t *testing.T, col arrow.Array) {
+				dt := &arrow.TimestampType{Unit: arrow.Nanosecond}
+				require.Equal(t, dt, col.DataType())
+				assert.EqualValues(t, 1_123_456_789, col.(*array.Timestamp).Value(0))
 			},
 		},
 		{
 			"timestamp with time zone",
-			"1970-01-01 00:00:01.000000 UTC",
+			"1970-01-01 00:00:01.234 UTC",
 			func(t *testing.T, col arrow.Array) {
-				require.Equal(t, arrow.FixedWidthTypes.Timestamp_us, col.DataType())
-				assert.EqualValues(t, 1_000, col.(*array.Timestamp).Value(0))
+				dt := &arrow.TimestampType{Unit: arrow.Nanosecond, TimeZone: "UTC"}
+				require.Equal(t, dt, col.DataType())
+				assert.EqualValues(t, 1_234_000_000, col.(*array.Timestamp).Value(0))
+			},
+		},
+		{
+			"timestamp with time zone",
+			"1970-01-01 00:00:01.234 America/New_York",
+			func(t *testing.T, col arrow.Array) {
+				dt := &arrow.TimestampType{Unit: arrow.Nanosecond, TimeZone: "UTC"}
+				require.Equal(t, dt, col.DataType())
+				// 00:00:01.234 Eastern = 05:00:01.234 UTC
+				assert.EqualValues(t, 5*3600*1_000_000_000+1_234_000_000, col.(*array.Timestamp).Value(0))
+			},
+		},
+		{
+			"timestamp with time zone",
+			"1970-01-01 03:45:01.234 +03:45",
+			func(t *testing.T, col arrow.Array) {
+				dt := &arrow.TimestampType{Unit: arrow.Nanosecond, TimeZone: "UTC"}
+				require.Equal(t, dt, col.DataType())
+				// 03:45:01.234 in +03:45 = 00:00:01.234 UTC
+				assert.EqualValues(t, 1_234_000_000, col.(*array.Timestamp).Value(0))
 			},
 		},
 		{
 			"varbinary",
-			"hello",
+			"68 65 6c 6c 6f",
 			func(t *testing.T, col arrow.Array) {
 				require.Equal(t, arrow.BinaryTypes.Binary, col.DataType())
 				assert.Equal(t, []byte("hello"), col.(*array.Binary).Value(0))
@@ -333,24 +406,158 @@ func TestBuildRecordBatch_AllTypes(t *testing.T) {
 		},
 		{
 			"binary",
-			"world",
+			"77 6f 72 6c 64",
 			func(t *testing.T, col arrow.Array) {
 				require.Equal(t, arrow.BinaryTypes.Binary, col.DataType())
 				assert.Equal(t, []byte("world"), col.(*array.Binary).Value(0))
 			},
 		},
 		{
-			// decimal is stringified
-			"decimal(18,2)",
-			"123.45",
+			"time",
+			"12:30:45.123456",
 			func(t *testing.T, col arrow.Array) {
-				require.Equal(t, arrow.BinaryTypes.String, col.DataType())
-				assert.Equal(t, "123.45", col.(*array.String).Value(0))
+				require.Equal(t, arrow.FixedWidthTypes.Time64us, col.DataType())
+				// 12h30m45.123456s in microseconds
+				expected := arrow.Time64(12*3600*1e6 + 30*60*1e6 + 45*1e6 + 123456)
+				assert.Equal(t, expected, col.(*array.Time64).Value(0))
+			},
+		},
+		{
+			"time",
+			"12:30:45",
+			func(t *testing.T, col arrow.Array) {
+				require.Equal(t, arrow.FixedWidthTypes.Time64us, col.DataType())
+				expected := arrow.Time64(12*3600*1e6 + 30*60*1e6 + 45*1e6)
+				assert.Equal(t, expected, col.(*array.Time64).Value(0))
+			},
+		},
+		{
+			"time",
+			"12:30:45.123",
+			func(t *testing.T, col arrow.Array) {
+				require.Equal(t, arrow.FixedWidthTypes.Time64us, col.DataType())
+				expected := arrow.Time64(12*3600*1e6 + 30*60*1e6 + 45*1e6 + 123000)
+				assert.Equal(t, expected, col.(*array.Time64).Value(0))
+			},
+		},
+		{
+			"time",
+			"00:00:00.000000",
+			func(t *testing.T, col arrow.Array) {
+				require.Equal(t, arrow.FixedWidthTypes.Time64us, col.DataType())
+				assert.Equal(t, arrow.Time64(0), col.(*array.Time64).Value(0))
+			},
+		},
+		{
+			"time with time zone",
+			"12:30:45.123456 +05:30",
+			func(t *testing.T, col arrow.Array) {
+				require.Equal(t, arrow.FixedWidthTypes.Time64us, col.DataType())
+				// 12:30:45.123456 +05:30 = 07:00:45.123456 UTC
+				expected := arrow.Time64(7*3600*1e6 + 0*60*1e6 + 45*1e6 + 123456)
+				assert.Equal(t, expected, col.(*array.Time64).Value(0))
+			},
+		},
+		{
+			"time with time zone",
+			"12:30:45+05:30",
+			func(t *testing.T, col arrow.Array) {
+				require.Equal(t, arrow.FixedWidthTypes.Time64us, col.DataType())
+				// 12:30:45+05:30 = 07:00:45 UTC
+				expected := arrow.Time64(7*3600*1e6 + 0*60*1e6 + 45*1e6)
+				assert.Equal(t, expected, col.(*array.Time64).Value(0))
+			},
+		},
+		{
+			"time with time zone",
+			"12:30:45.123+05:30",
+			func(t *testing.T, col arrow.Array) {
+				require.Equal(t, arrow.FixedWidthTypes.Time64us, col.DataType())
+				// 12:30:45.123+05:30 = 07:00:45.123 UTC
+				expected := arrow.Time64(7*3600*1e6 + 0*60*1e6 + 45*1e6 + 123000)
+				assert.Equal(t, expected, col.(*array.Time64).Value(0))
+			},
+		},
+		{
+			"time with time zone",
+			"12:30:45.123456+05:30",
+			func(t *testing.T, col arrow.Array) {
+				require.Equal(t, arrow.FixedWidthTypes.Time64us, col.DataType())
+				// 12:30:45.123456+05:30 = 07:00:45.123456 UTC (no space before offset)
+				expected := arrow.Time64(7*3600*1e6 + 0*60*1e6 + 45*1e6 + 123456)
+				assert.Equal(t, expected, col.(*array.Time64).Value(0))
+			},
+		},
+		{
+			"time with time zone",
+			"08:00:00-03:00",
+			func(t *testing.T, col arrow.Array) {
+				require.Equal(t, arrow.FixedWidthTypes.Time64us, col.DataType())
+				// 08:00:00 -03:00 = 11:00:00 UTC
+				expected := arrow.Time64(11 * 3600 * 1e6)
+				assert.Equal(t, expected, col.(*array.Time64).Value(0))
+			},
+		},
+		{
+			"interval day to second",
+			"1 12:30:45.123",
+			func(t *testing.T, col arrow.Array) {
+				require.Equal(t, arrow.FixedWidthTypes.DayTimeInterval, col.DataType())
+				v := col.(*array.DayTimeInterval).Value(0)
+				assert.EqualValues(t, 1, v.Days)
+				assert.EqualValues(t, 12*3600*1000+30*60*1000+45*1000+123, v.Milliseconds)
+			},
+		},
+		{
+			"interval day to second",
+			"0 00:00:00.000",
+			func(t *testing.T, col arrow.Array) {
+				require.Equal(t, arrow.FixedWidthTypes.DayTimeInterval, col.DataType())
+				v := col.(*array.DayTimeInterval).Value(0)
+				assert.EqualValues(t, 0, v.Days)
+				assert.EqualValues(t, 0, v.Milliseconds)
+			},
+		},
+		{
+			"interval day to second",
+			"30 05:00:00.000",
+			func(t *testing.T, col arrow.Array) {
+				require.Equal(t, arrow.FixedWidthTypes.DayTimeInterval, col.DataType())
+				v := col.(*array.DayTimeInterval).Value(0)
+				assert.EqualValues(t, 30, v.Days)
+				assert.EqualValues(t, 5*3600*1000, v.Milliseconds)
+			},
+		},
+		{
+			"interval year to month",
+			"9-3",
+			func(t *testing.T, col arrow.Array) {
+				require.Equal(t, arrow.FixedWidthTypes.MonthInterval, col.DataType())
+				v := col.(*array.MonthInterval).Value(0)
+				assert.EqualValues(t, 9*12+3, v)
+			},
+		},
+		{
+			"interval year to month",
+			"0-0",
+			func(t *testing.T, col arrow.Array) {
+				require.Equal(t, arrow.FixedWidthTypes.MonthInterval, col.DataType())
+				v := col.(*array.MonthInterval).Value(0)
+				assert.EqualValues(t, 0, v)
+			},
+		},
+		{
+			"interval year to month",
+			"1-6",
+			func(t *testing.T, col arrow.Array) {
+				require.Equal(t, arrow.FixedWidthTypes.MonthInterval, col.DataType())
+				v := col.(*array.MonthInterval).Value(0)
+				assert.EqualValues(t, 18, v)
 			},
 		},
 		{
 			// array is stringified
-			"array<int>",
+			"array",
 			"[1, 2, 3]",
 			func(t *testing.T, col arrow.Array) {
 				require.Equal(t, arrow.BinaryTypes.String, col.DataType())
@@ -359,7 +566,7 @@ func TestBuildRecordBatch_AllTypes(t *testing.T) {
 		},
 		{
 			// map is stringified
-			"map<varchar,int>",
+			"map",
 			"{a=1}",
 			func(t *testing.T, col arrow.Array) {
 				require.Equal(t, arrow.BinaryTypes.String, col.DataType())
@@ -392,4 +599,21 @@ func TestBuildRecordBatch_AllTypes(t *testing.T) {
 			tt.check(t, batch.Column(0))
 		})
 	}
+
+	// Decimal requires Precision/Scale from ColumnInfo.
+	t.Run("decimal/123.45", func(t *testing.T) {
+		colInfo := []types.ColumnInfo{{Name: strPtr("col"), Type: strPtr("decimal"), Precision: 18, Scale: 2}}
+		rows := []types.Row{{Data: []types.Datum{{VarCharValue: strPtr("123.45")}}}}
+
+		schema := buildSchema(colInfo)
+		batch, err := buildRecordBatch(memory.DefaultAllocator, schema, rows)
+		require.NoError(t, err)
+		defer batch.Release()
+
+		require.EqualValues(t, 1, batch.NumRows())
+		col := batch.Column(0)
+		dt := &arrow.Decimal128Type{Precision: 18, Scale: 2}
+		require.Equal(t, dt, col.DataType())
+		assert.Equal(t, "123.45", col.(*array.Decimal128).Value(0).ToString(2))
+	})
 }

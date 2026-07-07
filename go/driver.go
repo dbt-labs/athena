@@ -20,7 +20,6 @@ package athena
 
 import (
 	"context"
-	"fmt"
 	"runtime/debug"
 
 	"github.com/adbc-drivers/driverbase-go/driverbase"
@@ -58,7 +57,7 @@ const (
 	AuthTypeProfile = "profile"
 )
 
-var infoVendorVersion string
+var infoDriverArrowVersion string
 var driverVersion = "dev"
 
 func init() {
@@ -67,8 +66,8 @@ func init() {
 			driverVersion = info.Main.Version
 		}
 		for _, dep := range info.Deps {
-			if dep.Path == "github.com/aws/aws-sdk-go-v2/service/athena" {
-				infoVendorVersion = fmt.Sprintf("aws-sdk-go-v2/service/athena %s", dep.Version)
+			if dep.Path == "github.com/apache/arrow-go/v18" {
+				infoDriverArrowVersion = dep.Version
 			}
 		}
 	}
@@ -79,24 +78,23 @@ type driverImpl struct {
 }
 
 // NewDriver creates a new Athena ADBC driver using the given Arrow allocator.
-func NewDriver(alloc memory.Allocator) adbc.Driver {
+func NewDriver(alloc memory.Allocator) driverbase.DriverWithContext {
 	info := driverbase.DefaultDriverInfo("Athena")
 	info.MustRegister(map[adbc.InfoCode]any{
-		adbc.InfoDriverName:      "ADBC Athena Driver",
-		adbc.InfoVendorSql:       true,
-		adbc.InfoVendorSubstrait: false,
-		adbc.InfoVendorVersion:   infoVendorVersion,
+		adbc.InfoVendorName:         "Amazon Athena",
+		adbc.InfoVendorArrowVersion: infoDriverArrowVersion,
+		adbc.InfoVendorSql:          true,
+		adbc.InfoVendorSubstrait:    false,
+		adbc.InfoDriverName:         "Amazon Athena ADBC driver",
+		adbc.InfoDriverVersion:      driverVersion,
+		adbc.InfoDriverArrowVersion: infoDriverArrowVersion,
 	})
 	return driverbase.NewDriver(&driverImpl{
 		DriverImplBase: driverbase.NewDriverImplBase(info, alloc),
 	})
 }
 
-func (d *driverImpl) NewDatabase(opts map[string]string) (adbc.Database, error) {
-	return d.NewDatabaseWithContext(context.Background(), opts)
-}
-
-func (d *driverImpl) NewDatabaseWithContext(ctx context.Context, opts map[string]string) (adbc.Database, error) {
+func (d *driverImpl) NewDatabaseWithContext(ctx context.Context, opts map[string]string) (adbc.DatabaseWithContext, error) {
 	dbBase, err := driverbase.NewDatabaseImplBase(ctx, &d.DriverImplBase)
 	if err != nil {
 		return nil, err
@@ -107,7 +105,7 @@ func (d *driverImpl) NewDatabaseWithContext(ctx context.Context, opts map[string
 		authType:         AuthTypeDefault,
 	}
 
-	if err := db.SetOptions(opts); err != nil {
+	if err := db.SetOptions(ctx, opts); err != nil {
 		return nil, err
 	}
 
