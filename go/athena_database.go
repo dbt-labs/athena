@@ -50,6 +50,9 @@ type databaseImpl struct {
 	// testClient is non-nil only during testing. When set, Open uses it
 	// directly instead of constructing a real AWS SDK client.
 	testClient athenaClientAPI
+	// testAWS is non-nil only during testing: the Glue / S3 / STS clients the
+	// catalog and storage operations use instead of real SDK clients.
+	testAWS *awsClients
 }
 
 func (d *databaseImpl) Open(ctx context.Context) (adbc.Connection, error) {
@@ -71,6 +74,7 @@ func (d *databaseImpl) Open(ctx context.Context) (adbc.Connection, error) {
 	conn := &connectionImpl{
 		ConnectionImplBase: driverbase.NewConnectionImplBase(&d.DatabaseImplBase),
 		athenaClient:       client,
+		aws:                d.testAWS,
 		db:                 d,
 		catalog:            d.catalog,
 		schema:             d.schema,

@@ -25,6 +25,7 @@ Copy `.env.example` → `.env` and fill in your values before running integratio
 | `connection.go` | `connectionImpl`: catalog/schema metadata queries |
 | `statement.go` | `statementImpl`: `ExecuteQuery` / `ExecuteUpdate`, polling loop, pagination |
 | `record_reader.go` | Schema derivation and string→Arrow conversion |
+| `operations.go` | Glue / S3 / STS / Lake Formation and Athena Spark calls behind the `athena.operation` statement options; results as one JSON cell |
 | `client.go` | `athenaClientAPI` interface — allows mock injection in tests |
 
 Tests are in the same package (`package athena`) except `driver_test.go` which uses the public API (`package athena_test`) and contains the integration tests.

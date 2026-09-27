@@ -32,6 +32,9 @@ type connectionImpl struct {
 
 	athenaClient athenaClientAPI
 	db           *databaseImpl
+	// aws holds the Glue / S3 / STS clients of the catalog and storage operations,
+	// built on first use (see operations.go).
+	aws *awsClients
 
 	// catalog and schema are per-connection copies of the database defaults,
 	// so that SetCurrentCatalog/SetCurrentDbSchema on one connection does not
@@ -42,6 +45,7 @@ type connectionImpl struct {
 
 func (c *connectionImpl) Close() error {
 	c.athenaClient = nil
+	c.aws = nil
 	c.db = nil
 	return nil
 }

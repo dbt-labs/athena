@@ -37,6 +37,10 @@ type statementImpl struct {
 
 	conn  *connectionImpl
 	query string
+	// operation and operationPayload select a catalog or storage operation in
+	// place of the SQL text (see operations.go).
+	operation        string
+	operationPayload string
 }
 
 func (s *statementImpl) Base() *driverbase.StatementImplBase {
@@ -55,6 +59,14 @@ func (s *statementImpl) Close() error {
 }
 
 func (s *statementImpl) SetOption(key, val string) error {
+	switch key {
+	case OptionOperation:
+		s.operation = val
+		return nil
+	case OptionOperationPayload:
+		s.operationPayload = val
+		return nil
+	}
 	return s.StatementImplBase.SetOption(key, val)
 }
 
@@ -87,6 +99,17 @@ func (s *statementImpl) ExecuteQuery(ctx context.Context) (array.RecordReader, i
 			Code: adbc.StatusInvalidState,
 		}
 	}
+	if s.operation != "" {
+		response, err := s.runOperation(ctx)
+		if err != nil {
+			return nil, -1, err
+		}
+		rdr, err := operationRecordReader(s.conn.Alloc, response)
+		if err != nil {
+			return nil, -1, err
+		}
+		return rdr, -1, nil
+	}
 	if s.query == "" {
 		return nil, -1, adbc.Error{
 			Code: adbc.StatusInvalidState,
@@ -118,6 +141,12 @@ func (s *statementImpl) ExecuteUpdate(ctx context.Context) (int64, error) {
 			Msg:  "[athena] statement already closed",
 			Code: adbc.StatusInvalidState,
 		}
+	}
+	if s.operation != "" {
+		if _, err := s.runOperation(ctx); err != nil {
+			return -1, err
+		}
+		return 0, nil
 	}
 	if s.query == "" {
 		return -1, adbc.Error{
