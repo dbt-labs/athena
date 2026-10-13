@@ -49,6 +49,29 @@ const (
 	OptionSessionToken = "athena.aws.session_token"
 	// OptionProfileName is the named AWS profile to use.
 	OptionProfileName = "athena.aws.profile"
+	// OptionRoleARN is an IAM role to assume on top of the credentials of the
+	// selected auth type. Every AWS client of the driver uses the assumed role.
+	OptionRoleARN = "athena.aws.role_arn"
+	// OptionRoleExternalID is the external ID passed to AssumeRole.
+	OptionRoleExternalID = "athena.aws.role_external_id"
+	// OptionRoleSessionName is the AssumeRole session name.
+	OptionRoleSessionName = "athena.aws.role_session_name"
+	// OptionRoleDuration is the lifetime of the assumed role's credentials, as a
+	// Go duration ("1h"); the SDK refreshes them before they expire.
+	OptionRoleDuration = "athena.aws.role_duration"
+	// OptionMaxAPIRetries is how many times the SDK retries a failed AWS API
+	// request, the first attempt not included (SDK default 2). It applies to
+	// the API calls only, never to a query that ran and failed.
+	OptionMaxAPIRetries = "athena.aws.max_api_retries"
+	// OptionAthenaEndpointURL overrides the endpoint of the Athena API, e.g. a
+	// VPC interface endpoint without private DNS.
+	OptionAthenaEndpointURL = "athena.aws.athena_endpoint_url"
+	// OptionSTSEndpointURL overrides the endpoint of the STS API, used to assume
+	// OptionRoleARN.
+	OptionSTSEndpointURL = "athena.aws.sts_endpoint_url"
+	// OptionPollInterval is the interval between query status checks, as a Go
+	// duration (default "500ms").
+	OptionPollInterval = "athena.poll_interval"
 
 	// AuthTypeDefault uses the default AWS credential chain (env vars, instance profile, etc.).
 	AuthTypeDefault = "iam"
@@ -105,6 +128,8 @@ func (d *driverImpl) NewDatabaseWithContext(ctx context.Context, opts map[string
 	db := &databaseImpl{
 		DatabaseImplBase: dbBase,
 		authType:         AuthTypeDefault,
+		pollInterval:     defaultPollInterval,
+		maxAPIRetries:    -1,
 	}
 
 	if err := db.SetOptions(opts); err != nil {

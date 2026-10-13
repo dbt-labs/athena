@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/adbc-drivers/driverbase-go/driverbase"
 	"github.com/apache/arrow-adbc/go/adbc"
@@ -101,6 +102,8 @@ func newTestDB(t testing.TB, mock athenaClientAPI) *databaseImpl {
 		schema:           "default",
 		outputLocation:   "s3://test-bucket/results/",
 		authType:         AuthTypeDefault,
+		maxAPIRetries:    -1,
+		pollInterval:     time.Millisecond, // NewDatabase's default is 500ms; tests poll fast
 		testClient:       mock,
 	}
 }

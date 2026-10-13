@@ -165,6 +165,10 @@ func (s *statementImpl) startQuery(ctx context.Context) (*string, error) {
 	return out.QueryExecutionId, nil
 }
 
+// defaultPollInterval is the interval between query status checks unless
+// OptionPollInterval is set.
+const defaultPollInterval = 500 * time.Millisecond
+
 func (s *statementImpl) waitForQuery(ctx context.Context, execID *string) error {
 	timer := time.NewTimer(0)
 	defer timer.Stop()
@@ -216,7 +220,7 @@ func (s *statementImpl) waitForQuery(ctx context.Context, execID *string) error 
 			}
 		default:
 			// QUEUED or RUNNING — reset timer and poll again.
-			timer.Reset(500 * time.Millisecond)
+			timer.Reset(s.conn.db.pollInterval)
 		}
 	}
 }

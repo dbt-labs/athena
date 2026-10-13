@@ -33,7 +33,7 @@ Tests are in the same package (`package athena`) except `driver_test.go` which u
 
 **Execution flow:**
 1. `StartQueryExecution` — submits the query
-2. `GetQueryExecution` — polled every 500 ms until SUCCEEDED / FAILED / CANCELLED
+2. `GetQueryExecution` — polled every `athena.poll_interval` (default 500 ms) until SUCCEEDED / FAILED / CANCELLED
 3. `GetQueryResultsPaginator` — fetches results one page at a time; one Arrow record batch per page
 4. Returns an `array.RecordReader` over all accumulated batches
 

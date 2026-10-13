@@ -59,6 +59,21 @@ The driver supports three auth modes, set via `athena.OptionAuthType`:
 | `"access_key"`| `AuthTypeAccessKey`   | Static credentials via `OptionAccessKeyID` / `OptionSecretKey` / `OptionSessionToken` |
 | `"profile"`   | `AuthTypeProfile`     | Named profile via `OptionProfileName`               |
 
+### Connection options
+
+Besides the options in the example above:
+
+| option | value |
+|---|---|
+| `athena.aws.role_arn` | IAM role assumed on top of the auth type's credentials, for every AWS call |
+| `athena.aws.role_external_id`, `athena.aws.role_session_name` | AssumeRole external ID and session name |
+| `athena.aws.role_duration` | lifetime of the assumed credentials (`"1h"`); refreshed before they expire |
+| `athena.aws.max_api_retries` | retries of a failed AWS API request, the first attempt not included (SDK default 2); a query that ran and failed is not rerun |
+| `athena.aws.athena_endpoint_url`, `athena.aws.sts_endpoint_url` | endpoint of the Athena API and of the STS API (used for `athena.aws.role_arn`), e.g. VPC interface endpoints without private DNS |
+| `athena.poll_interval` | interval between query status checks (default `"500ms"`) |
+
+The AWS SDK's own service-specific endpoint settings (`AWS_ENDPOINT_URL_ATHENA`, `AWS_ENDPOINT_URL_STS`, or a `services` section of the shared config file) apply too; the options above take precedence.
+
 ## Development
 
 ### Build

@@ -159,11 +159,66 @@ func TestAllOptionConstants(t *testing.T) {
 	assert.Equal(t, "athena.aws.secret_access_key", athena.OptionSecretKey)
 	assert.Equal(t, "athena.aws.session_token", athena.OptionSessionToken)
 	assert.Equal(t, "athena.aws.profile", athena.OptionProfileName)
+	assert.Equal(t, "athena.aws.role_arn", athena.OptionRoleARN)
+	assert.Equal(t, "athena.aws.role_external_id", athena.OptionRoleExternalID)
+	assert.Equal(t, "athena.aws.role_session_name", athena.OptionRoleSessionName)
+	assert.Equal(t, "athena.aws.role_duration", athena.OptionRoleDuration)
+	assert.Equal(t, "athena.aws.max_api_retries", athena.OptionMaxAPIRetries)
+	assert.Equal(t, "athena.aws.athena_endpoint_url", athena.OptionAthenaEndpointURL)
+	assert.Equal(t, "athena.aws.sts_endpoint_url", athena.OptionSTSEndpointURL)
+	assert.Equal(t, "athena.poll_interval", athena.OptionPollInterval)
+}
+
+func TestConnectionOptions_GetSet(t *testing.T) {
+	drv := athena.NewDriver(memory.DefaultAllocator)
+	db, err := drv.NewDatabase(map[string]string{})
+	require.NoError(t, err)
+	defer db.Close()
+	gso := getSetOptions(t, db)
+
+	for key, want := range map[string]string{
+		athena.OptionPollInterval:  "500ms",
+		athena.OptionMaxAPIRetries: "", // unset: the SDK default
+	} {
+		got, err := gso.GetOption(key)
+		require.NoError(t, err)
+		assert.Equal(t, want, got, key)
+	}
+
+	for key, value := range map[string]string{
+		athena.OptionRoleARN:           "arn:aws:iam::123456789012:role/dbt",
+		athena.OptionRoleExternalID:    "ext-1",
+		athena.OptionRoleSessionName:   "dbt-athena",
+		athena.OptionRoleDuration:      "15m0s",
+		athena.OptionMaxAPIRetries:     "0",
+		athena.OptionAthenaEndpointURL: "https://athena.example.internal",
+		athena.OptionSTSEndpointURL:    "https://sts.example.internal",
+		athena.OptionPollInterval:      "1.5s",
+	} {
+		require.NoError(t, gso.SetOption(key, value), key)
+		got, err := gso.GetOption(key)
+		require.NoError(t, err)
+		assert.Equal(t, value, got, key)
+	}
+}
+
+func TestConnectionOptions_InvalidValues(t *testing.T) {
+	drv := athena.NewDriver(memory.DefaultAllocator)
+	for key, value := range map[string]string{
+		athena.OptionRoleDuration:  "3600",
+		athena.OptionPollInterval:  "-1s",
+		athena.OptionMaxAPIRetries: "-1",
+	} {
+		_, err := drv.NewDatabase(map[string]string{key: value})
+		var adbcErr adbc.Error
+		require.ErrorAs(t, err, &adbcErr, key)
+		assert.Equal(t, adbc.StatusInvalidArgument, adbcErr.Code, key)
+	}
 }
 
 // integrationConn opens a real Athena connection from environment variables and
 // registers cleanup. Skips the test if ADBC_ATHENA_TESTS is unset.
-func integrationConn(t *testing.T) adbc.Connection {
+func integrationConn(t *testing.T, extraOpts ...map[string]string) adbc.Connection {
 	t.Helper()
 	if os.Getenv("ADBC_ATHENA_TESTS") == "" {
 		t.Skip("set ADBC_ATHENA_TESTS=1 to run integration tests")
@@ -195,6 +250,12 @@ func integrationConn(t *testing.T) adbc.Connection {
 	if profile := os.Getenv("AWS_PROFILE"); profile != "" {
 		opts[athena.OptionAuthType]    = athena.AuthTypeProfile
 		opts[athena.OptionProfileName] = profile
+	}
+
+	for _, extra := range extraOpts {
+		for k, v := range extra {
+			opts[k] = v
+		}
 	}
 
 	drv := athena.NewDriver(memory.DefaultAllocator)
@@ -230,6 +291,32 @@ func TestIntegration(t *testing.T) {
 	conn := integrationConn(t)
 	rec := runQuery(t, conn, "SELECT 1 AS n")
 	assert.EqualValues(t, 1, rec.NumCols())
+}
+
+// TestIntegration_AthenaEndpointURL checks the Athena calls go to the endpoint
+// athena.aws.athena_endpoint_url names: the region's own works, a dead one fails.
+func TestIntegration_AthenaEndpointURL(t *testing.T) {
+	region := os.Getenv("AWS_DEFAULT_REGION")
+	if region == "" {
+		region = "us-east-1"
+	}
+	conn := integrationConn(t, map[string]string{
+		athena.OptionAthenaEndpointURL: "https://athena." + region + ".amazonaws.com",
+	})
+	rec := runQuery(t, conn, "SELECT 1 AS n")
+	assert.EqualValues(t, 1, rec.NumRows())
+
+	dead := integrationConn(t, map[string]string{
+		athena.OptionAthenaEndpointURL: "https://127.0.0.1:9",
+		athena.OptionMaxAPIRetries:     "0",
+	})
+	stmt, err := dead.NewStatement()
+	require.NoError(t, err)
+	defer stmt.Close()
+	require.NoError(t, stmt.SetSqlQuery("SELECT 1 AS n"))
+	_, _, err = stmt.ExecuteQuery(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "127.0.0.1:9")
 }
 
 func TestIntegration_DataTypes(t *testing.T) {
