@@ -172,17 +172,7 @@ func (s *statementImpl) waitForQuery(ctx context.Context, execID *string) error 
 	for {
 		select {
 		case <-ctx.Done():
-			// Best-effort: stop the running Athena query to avoid unnecessary cost.
-			// Use a short timeout so a network stall doesn't block indefinitely.
-			stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer stopCancel()
-			_, _ = s.conn.athenaClient.StopQueryExecution(stopCtx, &athenaSDK.StopQueryExecutionInput{
-				QueryExecutionId: execID,
-			})
-			return adbc.Error{
-				Code: adbc.StatusCancelled,
-				Msg:  ctx.Err().Error(),
-			}
+			return s.stopQuery(ctx, execID)
 		case <-timer.C:
 		}
 
@@ -190,6 +180,11 @@ func (s *statementImpl) waitForQuery(ctx context.Context, execID *string) error 
 			QueryExecutionId: execID,
 		})
 		if err != nil {
+			// A cancellation during the status call fails the call itself; the
+			// query is still running and must be stopped all the same.
+			if ctx.Err() != nil {
+				return s.stopQuery(ctx, execID)
+			}
 			return adbc.Error{
 				Code: adbc.StatusIO,
 				Msg:  fmt.Sprintf("[athena] GetQueryExecution failed: %v", err),
@@ -218,6 +213,21 @@ func (s *statementImpl) waitForQuery(ctx context.Context, execID *string) error 
 			// QUEUED or RUNNING — reset timer and poll again.
 			timer.Reset(500 * time.Millisecond)
 		}
+	}
+}
+
+// stopQuery stops the running query of a cancelled statement and returns the
+// cancellation error. Best effort, with a short timeout so a network stall does
+// not block the cancellation.
+func (s *statementImpl) stopQuery(ctx context.Context, execID *string) error {
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stopCancel()
+	_, _ = s.conn.athenaClient.StopQueryExecution(stopCtx, &athenaSDK.StopQueryExecutionInput{
+		QueryExecutionId: execID,
+	})
+	return adbc.Error{
+		Code: adbc.StatusCancelled,
+		Msg:  ctx.Err().Error(),
 	}
 }
 

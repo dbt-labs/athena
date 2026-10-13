@@ -303,6 +303,65 @@ func TestFunctional_ContextCancellationMidPoll(t *testing.T) {
 	assert.Equal(t, adbc.StatusCancelled, adbcErr.Code)
 }
 
+// TestFunctional_CancellationStopsTheQuery verifies that a cancelled statement
+// stops its Athena query and reports a cancellation, whether the cancellation
+// arrives between two status calls or during one, which fails that call.
+func TestFunctional_CancellationStopsTheQuery(t *testing.T) {
+	running := &athenaSDK.GetQueryExecutionOutput{
+		QueryExecution: &types.QueryExecution{
+			Status: &types.QueryExecutionStatus{State: types.QueryExecutionStateRunning},
+		},
+	}
+	timings := map[string]func(ctx context.Context, cancel context.CancelFunc) (*athenaSDK.GetQueryExecutionOutput, error){
+		"between status calls": func(_ context.Context, cancel context.CancelFunc) (*athenaSDK.GetQueryExecutionOutput, error) {
+			cancel()
+			return running, nil
+		},
+		"during a status call": func(ctx context.Context, cancel context.CancelFunc) (*athenaSDK.GetQueryExecutionOutput, error) {
+			cancel()
+			return nil, ctx.Err()
+		},
+	}
+	executes := map[string]func(ctx context.Context, stmt *statementImpl) error{
+		"ExecuteQuery": func(ctx context.Context, stmt *statementImpl) error {
+			_, _, err := stmt.ExecuteQuery(ctx)
+			return err
+		},
+		"ExecuteUpdate": func(ctx context.Context, stmt *statementImpl) error {
+			_, err := stmt.ExecuteUpdate(ctx)
+			return err
+		},
+	}
+	for timing, statusCall := range timings {
+		for name, execute := range executes {
+			t.Run(timing+"/"+name, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				var stopped []string
+				mock := &mockAthenaClient{
+					startQueryExecutionFn: func(_ context.Context, _ *athenaSDK.StartQueryExecutionInput, _ ...func(*athenaSDK.Options)) (*athenaSDK.StartQueryExecutionOutput, error) {
+						return &athenaSDK.StartQueryExecutionOutput{QueryExecutionId: strp("exec-cancelled")}, nil
+					},
+					getQueryExecutionFn: func(ctx context.Context, _ *athenaSDK.GetQueryExecutionInput, _ ...func(*athenaSDK.Options)) (*athenaSDK.GetQueryExecutionOutput, error) {
+						return statusCall(ctx, cancel)
+					},
+					stopQueryExecutionFn: func(_ context.Context, in *athenaSDK.StopQueryExecutionInput, _ ...func(*athenaSDK.Options)) (*athenaSDK.StopQueryExecutionOutput, error) {
+						stopped = append(stopped, *in.QueryExecutionId)
+						return &athenaSDK.StopQueryExecutionOutput{}, nil
+					},
+				}
+				stmt := newTestStmt(t, mock)
+				require.NoError(t, stmt.SetSqlQuery("SELECT sleep(60)"))
+
+				var adbcErr adbc.Error
+				require.ErrorAs(t, execute(ctx, stmt), &adbcErr)
+				assert.Equal(t, adbc.StatusCancelled, adbcErr.Code)
+				assert.Equal(t, []string{"exec-cancelled"}, stopped)
+			})
+		}
+	}
+}
+
 // TestFunctional_MultiPageResults verifies that multi-page pagination is
 // read correctly across multiple result batches and returns all rows.
 func TestFunctional_MultiPageResults(t *testing.T) {
