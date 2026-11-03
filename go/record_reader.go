@@ -18,11 +18,15 @@
 package athena
 
 import (
+	"encoding/hex"
 	"fmt"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
+	"github.com/apache/arrow-go/v18/arrow/decimal128"
 	"github.com/apache/arrow-go/v18/arrow/memory"
 	"github.com/aws/aws-sdk-go-v2/service/athena/types"
 )
@@ -79,7 +83,11 @@ func athenaColumnTypeToArrow(col types.ColumnInfo) arrow.DataType {
 	if col.Type == nil {
 		return arrow.BinaryTypes.String
 	}
-	return athenaTypeStringToArrow(*col.Type)
+	t := *col.Type
+	if t == "decimal" {
+		return &arrow.Decimal128Type{Precision: col.Precision, Scale: col.Scale}
+	}
+	return athenaTypeStringToArrow(t)
 }
 
 // athenaTypeStringToArrow maps an Athena type string to an Arrow DataType.
@@ -103,12 +111,22 @@ func athenaTypeStringToArrow(t string) arrow.DataType {
 		return arrow.FixedWidthTypes.Boolean
 	case "date":
 		return arrow.FixedWidthTypes.Date32
-	case "timestamp", "timestamp with time zone":
-		return arrow.FixedWidthTypes.Timestamp_us
+	case "time", "time with time zone":
+		return arrow.FixedWidthTypes.Time64us
+	case "timestamp":
+		return &arrow.TimestampType{Unit: arrow.Nanosecond}
+	case "timestamp with time zone":
+		return &arrow.TimestampType{Unit: arrow.Nanosecond, TimeZone: "UTC"}
 	case "varbinary", "binary":
 		return arrow.BinaryTypes.Binary
+	case "interval day to second":
+		return arrow.FixedWidthTypes.DayTimeInterval
+	case "interval year to month":
+		return arrow.FixedWidthTypes.MonthInterval
+	case "hyperloglog", "p4hyperloglog", "setdigest", "qdigest", "tdigest":
+		return arrow.BinaryTypes.Binary
 	default:
-		// array, map, row, decimal, json — stringify
+		// array, map, row, json — stringify
 		return arrow.BinaryTypes.String
 	}
 }
@@ -201,18 +219,172 @@ func appendValue(bldr array.Builder, dt arrow.DataType, val string, isNull bool)
 		}
 		bldr.(*array.Date32Builder).Append(arrow.Date32(days))
 	case arrow.TIMESTAMP:
-		ms, err := parseTimestampToMillis(val)
+		ns, err := parseTimestampToNanos(val)
 		if err != nil {
 			return err
 		}
-		bldr.(*array.TimestampBuilder).Append(arrow.Timestamp(ms))
+		bldr.(*array.TimestampBuilder).Append(arrow.Timestamp(ns))
 	case arrow.BINARY:
-		bldr.(*array.BinaryBuilder).Append([]byte(val))
+		b, err := hex.DecodeString(strings.ReplaceAll(val, " ", ""))
+		if err != nil {
+			return err
+		}
+		bldr.(*array.BinaryBuilder).Append(b)
+	case arrow.DECIMAL128:
+		decType := dt.(*arrow.Decimal128Type)
+		n, err := decimal128.FromString(val, decType.Precision, decType.Scale)
+		if err != nil {
+			return err
+		}
+		bldr.(*array.Decimal128Builder).Append(n)
+	case arrow.TIME64:
+		v, err := parseTimeToMicros(val)
+		if err != nil {
+			return err
+		}
+		bldr.(*array.Time64Builder).Append(v)
+	case arrow.INTERVAL_DAY_TIME:
+		v, err := parseDayTimeInterval(val)
+		if err != nil {
+			return err
+		}
+		bldr.(*array.DayTimeIntervalBuilder).Append(v)
+	case arrow.INTERVAL_MONTHS:
+		v, err := parseMonthInterval(val)
+		if err != nil {
+			return err
+		}
+		bldr.(*array.MonthIntervalBuilder).Append(v)
 	default:
 		// STRING covers varchar, string, char, decimal, array, map, row, json, etc.
 		bldr.(*array.StringBuilder).Append(val)
 	}
 	return nil
+}
+
+// parseTimeToMicros parses Athena's time string into microseconds since midnight.
+// Handles both "HH:MM:SS.ffffff" (plain time) and "HH:MM:SS.ffffff TZ" (time with timezone).
+// The timezone may be separated by a space or attached directly (e.g. "12:30:45.123+05:30").
+// For time with timezone, the value is normalized to UTC.
+func parseTimeToMicros(val string) (arrow.Time64, error) {
+	timePart, offsetMicros, err := splitTimeAndOffset(val)
+	if err != nil {
+		return 0, err
+	}
+
+	t, err := arrow.Time64FromString(timePart, arrow.Microsecond)
+	if err != nil {
+		return 0, err
+	}
+
+	return t - arrow.Time64(offsetMicros), nil
+}
+
+func splitTimeAndOffset(val string) (string, int64, error) {
+	// Check for space-separated timezone: "12:30:45.123 UTC" or "12:30:45.123 +05:30"
+	if spaceIdx := strings.IndexByte(val, ' '); spaceIdx > 0 {
+		offset, err := parseTimezoneOffset(val[spaceIdx+1:])
+		return val[:spaceIdx], offset, err
+	}
+
+	// Check for offset attached directly after fractional seconds: "12:30:45.123+05:30" or "12:30:45.123-03:00"
+	// The offset is always ±HH:MM (6 chars) at the end.
+	if len(val) > 6 {
+		offsetStart := len(val) - 6
+		if val[offsetStart] == '+' || val[offsetStart] == '-' {
+			offset, err := parseTimezoneOffset(val[offsetStart:])
+			return val[:offsetStart], offset, err
+		}
+	}
+
+	return val, 0, nil
+}
+
+func parseTimezoneOffset(tzStr string) (int64, error) {
+	if tzStr == "UTC" || tzStr == "Z" {
+		return 0, nil
+	}
+	if len(tzStr) == 6 && (tzStr[0] == '+' || tzStr[0] == '-') {
+		h, err := strconv.ParseInt(tzStr[1:3], 10, 32)
+		if err != nil {
+			return 0, fmt.Errorf("parsing timezone hours: %w", err)
+		}
+		m, err := strconv.ParseInt(tzStr[4:6], 10, 32)
+		if err != nil {
+			return 0, fmt.Errorf("parsing timezone minutes: %w", err)
+		}
+		offset := (h*3600 + m*60) * 1_000_000
+		if tzStr[0] == '-' {
+			offset = -offset
+		}
+		return offset, nil
+	}
+	return 0, nil
+}
+
+// parseDayTimeInterval parses Athena's "D HH:MM:SS.mmm" format into an Arrow DayTimeInterval.
+func parseDayTimeInterval(s string) (arrow.DayTimeInterval, error) {
+	spaceIdx := strings.IndexByte(s, ' ')
+	if spaceIdx < 0 {
+		return arrow.DayTimeInterval{}, fmt.Errorf("unexpected interval day to second format: %q", s)
+	}
+
+	days, err := strconv.ParseInt(s[:spaceIdx], 10, 32)
+	if err != nil {
+		return arrow.DayTimeInterval{}, fmt.Errorf("parsing days in interval: %w", err)
+	}
+
+	timePart := s[spaceIdx+1:]
+	if len(timePart) < 8 {
+		return arrow.DayTimeInterval{}, fmt.Errorf("unexpected time format in interval: %q", timePart)
+	}
+
+	hours, err := strconv.ParseInt(timePart[0:2], 10, 32)
+	if err != nil {
+		return arrow.DayTimeInterval{}, err
+	}
+	mins, err := strconv.ParseInt(timePart[3:5], 10, 32)
+	if err != nil {
+		return arrow.DayTimeInterval{}, err
+	}
+	secs, err := strconv.ParseInt(timePart[6:8], 10, 32)
+	if err != nil {
+		return arrow.DayTimeInterval{}, err
+	}
+
+	ms := hours*3600000 + mins*60000 + secs*1000
+	if len(timePart) > 8 && timePart[8] == '.' {
+		frac := timePart[9:]
+		for len(frac) < 3 {
+			frac += "0"
+		}
+		fracMs, err := strconv.ParseInt(frac[:3], 10, 32)
+		if err != nil {
+			return arrow.DayTimeInterval{}, err
+		}
+		ms += fracMs
+	}
+
+	return arrow.DayTimeInterval{Days: int32(days), Milliseconds: int32(ms)}, nil
+}
+
+// parseMonthInterval parses Athena's "Y-M" format into an Arrow MonthInterval (total months).
+func parseMonthInterval(s string) (arrow.MonthInterval, error) {
+	dashIdx := strings.IndexByte(s, '-')
+	if dashIdx < 0 {
+		return 0, fmt.Errorf("unexpected interval year to month format: %q", s)
+	}
+
+	years, err := strconv.ParseInt(s[:dashIdx], 10, 32)
+	if err != nil {
+		return 0, fmt.Errorf("parsing years in interval: %w", err)
+	}
+	months, err := strconv.ParseInt(s[dashIdx+1:], 10, 32)
+	if err != nil {
+		return 0, fmt.Errorf("parsing months in interval: %w", err)
+	}
+
+	return arrow.MonthInterval(years*12 + months), nil
 }
 
 // parseDateToDays parses "YYYY-MM-DD" and returns days since Unix epoch (1970-01-01).
@@ -254,13 +426,12 @@ func civilToDays(y, m, d int) int32 {
 	return int32(era*146097 + doe - 719468)
 }
 
-// parseTimestampToMillis parses an Athena timestamp string to milliseconds since Unix epoch.
+// parseTimestampToNanos parses an Athena timestamp string to nanoseconds since Unix epoch.
 // Athena timestamps use the format "YYYY-MM-DD HH:MM:SS[.fraction][ <tz>]" where fraction
-// is a variable-length sequence of decimal digits; it is truncated to 3 digits (milliseconds).
-// Timezone suffixes (e.g., " UTC", " America/New_York", "+00:00") are ignored — all
-// timestamps are treated as UTC, consistent with Athena's behaviour for TIMESTAMP
-// (which has no timezone) and TIMESTAMP WITH TIME ZONE (which Athena normalises to UTC).
-func parseTimestampToMillis(s string) (int64, error) {
+// is a variable-length sequence of up to 9 decimal digits (nanoseconds).
+// If a timezone suffix is present (e.g., " UTC", " America/New_York", " +03:45"), the
+// timestamp is converted to UTC. Plain timestamps (no suffix) are assumed UTC.
+func parseTimestampToNanos(s string) (int64, error) {
 	if len(s) < 19 {
 		return 0, fmt.Errorf("unexpected timestamp format: %q", s)
 	}
@@ -289,38 +460,84 @@ func parseTimestampToMillis(s string) (int64, error) {
 		return 0, err
 	}
 
-	var fracMillis int64
-	if len(s) > 19 && s[19] == '.' {
-		// Fractional seconds start at position 20.
-		frac := s[20:]
-		// Truncate at any non-digit (e.g. space before timezone suffix).
-		for i := 0; i < len(frac); i++ {
-			if frac[i] < '0' || frac[i] > '9' {
-				frac = frac[:i]
-				break
-			}
+	var fracNanos int64
+	rest := s[19:]
+	if len(rest) > 0 && rest[0] == '.' {
+		rest = rest[1:]
+		end := 0
+		for end < len(rest) && rest[end] >= '0' && rest[end] <= '9' {
+			end++
 		}
-		// Pad or truncate to exactly 3 digits (milliseconds).
-		for len(frac) < 3 {
+		frac := rest[:end]
+		rest = rest[end:]
+		// Pad or truncate to exactly 9 digits (nanoseconds).
+		for len(frac) < 9 {
 			frac += "0"
 		}
-		if len(frac) > 3 {
-			frac = frac[:3]
+		if len(frac) > 9 {
+			frac = frac[:9]
 		}
-		fracMillis, err = strconv.ParseInt(frac, 10, 64)
+		fracNanos, err = strconv.ParseInt(frac, 10, 64)
 		if err != nil {
 			return 0, err
 		}
 	}
-	// Any trailing timezone data after position 19 (or after the fractional part)
-	// is intentionally ignored.
 
 	days := civilToDays(year, month, day)
-	totalMillis := int64(days)*86400*1_000 +
-		int64(hour)*3600*1_000 +
-		int64(min)*60*1_000 +
-		int64(sec)*1_000 +
-		fracMillis
+	totalNanos := int64(days)*86400*1_000_000_000 +
+		int64(hour)*3600*1_000_000_000 +
+		int64(min)*60*1_000_000_000 +
+		int64(sec)*1_000_000_000 +
+		fracNanos
 
-	return totalMillis, nil
+	// Parse timezone suffix if present.
+	rest = strings.TrimSpace(rest)
+	if len(rest) > 0 {
+		offsetNanos, err := parseTZOffsetNanos(rest, year, month, day, hour, min, sec)
+		if err != nil {
+			return 0, err
+		}
+		totalNanos -= offsetNanos
+	}
+
+	return totalNanos, nil
+}
+
+// parseTZOffsetNanos parses a timezone suffix and returns its UTC offset in nanoseconds.
+// The offset follows the sign convention of ISO 8601: +03:45 means local is 3h45m ahead
+// of UTC, so subtracting the offset from local time yields UTC.
+// Supports: "UTC", "+HH:MM", "-HH:MM", and IANA zone names (e.g., "America/New_York").
+// For IANA names, the offset is resolved at the given local time (year, month, day, etc.)
+// to account for daylight saving transitions.
+func parseTZOffsetNanos(tz string, year, month, day, hour, min, sec int) (int64, error) {
+	if tz == "UTC" || tz == "utc" {
+		return 0, nil
+	}
+	if len(tz) >= 6 && (tz[0] == '+' || tz[0] == '-') {
+		sign := int64(1)
+		if tz[0] == '-' {
+			sign = -1
+		}
+		parts := strings.SplitN(tz[1:], ":", 2)
+		if len(parts) != 2 {
+			return 0, fmt.Errorf("unexpected timezone offset format: %q", tz)
+		}
+		h, err := strconv.Atoi(parts[0])
+		if err != nil {
+			return 0, err
+		}
+		m, err := strconv.Atoi(parts[1])
+		if err != nil {
+			return 0, err
+		}
+		return sign * (int64(h)*3600 + int64(m)*60) * 1_000_000_000, nil
+	}
+	// IANA timezone name — resolve offset at the given local time.
+	loc, err := time.LoadLocation(tz)
+	if err != nil {
+		return 0, fmt.Errorf("unknown timezone: %q: %w", tz, err)
+	}
+	t := time.Date(year, time.Month(month), day, hour, min, sec, 0, loc)
+	_, offsetSec := t.Zone()
+	return int64(offsetSec) * 1_000_000_000, nil
 }
