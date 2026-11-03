@@ -17,7 +17,7 @@
 
 module github.com/dbt-labs/athena/go
 
-go 1.26.0
+go 1.26.10
 
 require (
 	github.com/adbc-drivers/driverbase-go/driverbase v0.0.0-20260322182445-8021407792c4
