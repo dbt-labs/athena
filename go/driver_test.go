@@ -232,6 +232,23 @@ func TestIntegration(t *testing.T) {
 	assert.EqualValues(t, 1, rec.NumCols())
 }
 
+// TestIntegration_QueryStatistics checks the statistics Athena reports for a
+// query reach the result schema metadata.
+func TestIntegration_QueryStatistics(t *testing.T) {
+	conn := integrationConn(t)
+	rec := runQuery(t, conn, "SELECT 1 AS n")
+	md := rec.Schema().Metadata()
+
+	id, ok := md.GetValue(athena.MetadataKeyQueryExecutionID)
+	assert.True(t, ok)
+	assert.Regexp(t, `^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`, id)
+	scanned, ok := md.GetValue(athena.MetadataKeyDataScannedInBytes)
+	assert.True(t, ok)
+	assert.Regexp(t, `^[0-9]+$`, scanned)
+	written, _ := md.GetValue(athena.MetadataKeyUpdateCount)
+	assert.Equal(t, "0", written, "Athena reports 0 rows written for a SELECT")
+}
+
 func TestIntegration_DataTypes(t *testing.T) {
 	conn := integrationConn(t)
 

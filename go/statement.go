@@ -20,6 +20,7 @@ package athena
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"sync/atomic"
 	"time"
 
@@ -99,11 +100,12 @@ func (s *statementImpl) ExecuteQuery(ctx context.Context) (array.RecordReader, i
 		return nil, -1, err
 	}
 
-	if err := s.waitForQuery(ctx, execID); err != nil {
+	execution, err := s.waitForQuery(ctx, execID)
+	if err != nil {
 		return nil, -1, err
 	}
 
-	rdr, err := s.buildPagedRecordReader(ctx, execID)
+	rdr, err := s.buildPagedRecordReader(ctx, execID, execution.Statistics)
 	if err != nil {
 		return nil, -1, err
 	}
@@ -131,7 +133,7 @@ func (s *statementImpl) ExecuteUpdate(ctx context.Context) (int64, error) {
 		return -1, err
 	}
 
-	if err := s.waitForQuery(ctx, execID); err != nil {
+	if _, err := s.waitForQuery(ctx, execID); err != nil {
 		return -1, err
 	}
 
@@ -165,7 +167,8 @@ func (s *statementImpl) startQuery(ctx context.Context) (*string, error) {
 	return out.QueryExecutionId, nil
 }
 
-func (s *statementImpl) waitForQuery(ctx context.Context, execID *string) error {
+// waitForQuery polls the query until it finishes and returns its final execution.
+func (s *statementImpl) waitForQuery(ctx context.Context, execID *string) (*types.QueryExecution, error) {
 	timer := time.NewTimer(0)
 	defer timer.Stop()
 
@@ -179,7 +182,7 @@ func (s *statementImpl) waitForQuery(ctx context.Context, execID *string) error 
 			_, _ = s.conn.athenaClient.StopQueryExecution(stopCtx, &athenaSDK.StopQueryExecutionInput{
 				QueryExecutionId: execID,
 			})
-			return adbc.Error{
+			return nil, adbc.Error{
 				Code: adbc.StatusCancelled,
 				Msg:  ctx.Err().Error(),
 			}
@@ -190,7 +193,7 @@ func (s *statementImpl) waitForQuery(ctx context.Context, execID *string) error 
 			QueryExecutionId: execID,
 		})
 		if err != nil {
-			return adbc.Error{
+			return nil, adbc.Error{
 				Code: adbc.StatusIO,
 				Msg:  fmt.Sprintf("[athena] GetQueryExecution failed: %v", err),
 			}
@@ -199,18 +202,18 @@ func (s *statementImpl) waitForQuery(ctx context.Context, execID *string) error 
 		state := out.QueryExecution.Status.State
 		switch state {
 		case types.QueryExecutionStateSucceeded:
-			return nil
+			return out.QueryExecution, nil
 		case types.QueryExecutionStateFailed:
 			reason := ""
 			if out.QueryExecution.Status.StateChangeReason != nil {
 				reason = *out.QueryExecution.Status.StateChangeReason
 			}
-			return adbc.Error{
+			return nil, adbc.Error{
 				Code: adbc.StatusIO,
 				Msg:  fmt.Sprintf("[athena] query failed: %s", reason),
 			}
 		case types.QueryExecutionStateCancelled:
-			return adbc.Error{
+			return nil, adbc.Error{
 				Code: adbc.StatusCancelled,
 				Msg:  "[athena] query was cancelled",
 			}
@@ -331,7 +334,8 @@ func (r *pagingRecordReader) Next() bool {
 // buildPagedRecordReader fetches the first Athena result page to obtain the schema,
 // then returns a pagingRecordReader that streams subsequent pages one at a time.
 // Only one page is held in memory at any point, avoiding OOM for large result sets.
-func (s *statementImpl) buildPagedRecordReader(ctx context.Context, execID *string) (array.RecordReader, error) {
+// The schema metadata carries the query's statistics (see MetadataKeyQueryExecutionID).
+func (s *statementImpl) buildPagedRecordReader(ctx context.Context, execID *string, stats *types.QueryExecutionStatistics) (array.RecordReader, error) {
 	input := &athenaSDK.GetQueryResultsInput{
 		QueryExecutionId: execID,
 	}
@@ -340,6 +344,7 @@ func (s *statementImpl) buildPagedRecordReader(ctx context.Context, execID *stri
 	// Fetch pages until we find one with ResultSetMetadata to determine the schema.
 	var schema *arrow.Schema
 	var firstPageRows []types.Row
+	var updateCount *int64
 	firstPage := true
 
 	for schema == nil && paginator.HasMorePages() {
@@ -351,6 +356,9 @@ func (s *statementImpl) buildPagedRecordReader(ctx context.Context, execID *stri
 			}
 		}
 
+		if firstPage {
+			updateCount = page.UpdateCount
+		}
 		if page.ResultSet != nil && page.ResultSet.ResultSetMetadata != nil && len(page.ResultSet.ResultSetMetadata.ColumnInfo) > 0 {
 			schema = buildSchema(page.ResultSet.ResultSetMetadata.ColumnInfo)
 		}
@@ -368,10 +376,12 @@ func (s *statementImpl) buildPagedRecordReader(ctx context.Context, execID *stri
 		}
 	}
 
-	if schema == nil {
-		// No pages returned — DDL or empty result set.
-		schema = arrow.NewSchema(nil, nil)
+	var fields []arrow.Field
+	if schema != nil {
+		fields = schema.Fields()
 	}
+	// No schema: DDL or an empty result set.
+	schema = arrow.NewSchema(fields, queryStatistics(*execID, stats, updateCount))
 
 	return newPagingRecordReader(ctx, s.conn.Alloc, schema, paginator, firstPageRows), nil
 }
@@ -409,6 +419,20 @@ func (s *statementImpl) ExecutePartitions(_ context.Context) (*arrow.Schema, adb
 		Code: adbc.StatusNotImplemented,
 		Msg:  "[athena] partitioned result sets not supported",
 	}
+}
+
+// queryStatistics is the schema metadata of a query result: the execution ID, the
+// bytes scanned, and the row count Athena reports for statements that write.
+func queryStatistics(execID string, stats *types.QueryExecutionStatistics, updateCount *int64) *arrow.Metadata {
+	md := map[string]string{MetadataKeyQueryExecutionID: execID}
+	if stats != nil && stats.DataScannedInBytes != nil {
+		md[MetadataKeyDataScannedInBytes] = strconv.FormatInt(*stats.DataScannedInBytes, 10)
+	}
+	if updateCount != nil {
+		md[MetadataKeyUpdateCount] = strconv.FormatInt(*updateCount, 10)
+	}
+	m := arrow.MetadataFrom(md)
+	return &m
 }
 
 // nilIfEmpty returns nil if s is empty, otherwise a pointer to s.

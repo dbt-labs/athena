@@ -49,6 +49,16 @@ for reader.Next() {
 }
 ```
 
+### Query statistics
+
+The schema of a query result carries the query's statistics as metadata:
+
+| key | value |
+|---|---|
+| `ATHENA:query_execution_id` | query execution ID |
+| `ATHENA:data_scanned_in_bytes` | bytes scanned |
+| `ATHENA:update_count` | rows written, as `GetQueryResults` reports them: the rows a `CREATE TABLE AS SELECT`, `INSERT INTO`, `MERGE`, `DELETE` or `UNLOAD` wrote, `0` for a `SELECT` or `SHOW`; absent for DDL |
+
 ### Authentication
 
 The driver supports three auth modes, set via `athena.OptionAuthType`:
