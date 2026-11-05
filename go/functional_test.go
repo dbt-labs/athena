@@ -28,6 +28,9 @@ import (
 	"github.com/apache/arrow-go/v18/arrow/memory"
 	athenaSDK "github.com/aws/aws-sdk-go-v2/service/athena"
 	"github.com/aws/aws-sdk-go-v2/service/athena/types"
+	athenaTypes "github.com/aws/aws-sdk-go-v2/service/athena/types"
+	glueSDK "github.com/aws/aws-sdk-go-v2/service/glue"
+	glueTypes "github.com/aws/aws-sdk-go-v2/service/glue/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -43,6 +46,8 @@ import (
 type mockAthenaClient struct {
 	startQueryExecutionFn func(ctx context.Context, params *athenaSDK.StartQueryExecutionInput, optFns ...func(*athenaSDK.Options)) (*athenaSDK.StartQueryExecutionOutput, error)
 	stopQueryExecutionFn  func(ctx context.Context, params *athenaSDK.StopQueryExecutionInput, optFns ...func(*athenaSDK.Options)) (*athenaSDK.StopQueryExecutionOutput, error)
+	getDatabaseFn         func(ctx context.Context, params *athenaSDK.GetDatabaseInput, optFns ...func(*athenaSDK.Options)) (*athenaSDK.GetDatabaseOutput, error)
+	getDataCatalogFn      func(ctx context.Context, params *athenaSDK.GetDataCatalogInput, optFns ...func(*athenaSDK.Options)) (*athenaSDK.GetDataCatalogOutput, error)
 	getQueryExecutionFn   func(ctx context.Context, params *athenaSDK.GetQueryExecutionInput, optFns ...func(*athenaSDK.Options)) (*athenaSDK.GetQueryExecutionOutput, error)
 	getQueryResultsFn     func(ctx context.Context, params *athenaSDK.GetQueryResultsInput, optFns ...func(*athenaSDK.Options)) (*athenaSDK.GetQueryResultsOutput, error)
 	getTableMetadataFn    func(ctx context.Context, params *athenaSDK.GetTableMetadataInput, optFns ...func(*athenaSDK.Options)) (*athenaSDK.GetTableMetadataOutput, error)
@@ -59,6 +64,12 @@ func (m *mockAthenaClient) StopQueryExecution(ctx context.Context, params *athen
 		return m.stopQueryExecutionFn(ctx, params, optFns...)
 	}
 	return &athenaSDK.StopQueryExecutionOutput{}, nil
+}
+func (m *mockAthenaClient) GetDatabase(ctx context.Context, params *athenaSDK.GetDatabaseInput, optFns ...func(*athenaSDK.Options)) (*athenaSDK.GetDatabaseOutput, error) {
+	return m.getDatabaseFn(ctx, params, optFns...)
+}
+func (m *mockAthenaClient) GetDataCatalog(ctx context.Context, params *athenaSDK.GetDataCatalogInput, optFns ...func(*athenaSDK.Options)) (*athenaSDK.GetDataCatalogOutput, error) {
+	return m.getDataCatalogFn(ctx, params, optFns...)
 }
 func (m *mockAthenaClient) GetQueryExecution(ctx context.Context, params *athenaSDK.GetQueryExecutionInput, optFns ...func(*athenaSDK.Options)) (*athenaSDK.GetQueryExecutionOutput, error) {
 	return m.getQueryExecutionFn(ctx, params, optFns...)
@@ -77,6 +88,19 @@ func (m *mockAthenaClient) ListDatabases(ctx context.Context, params *athenaSDK.
 }
 func (m *mockAthenaClient) ListTableMetadata(ctx context.Context, params *athenaSDK.ListTableMetadataInput, optFns ...func(*athenaSDK.Options)) (*athenaSDK.ListTableMetadataOutput, error) {
 	return m.listTableMetadataFn(ctx, params, optFns...)
+}
+
+// mockGlueClient implements glueClientAPI using per-method function fields.
+type mockGlueClient struct {
+	getCatalogFn  func(ctx context.Context, params *glueSDK.GetCatalogInput, optFns ...func(*glueSDK.Options)) (*glueSDK.GetCatalogOutput, error)
+	getCatalogsFn func(ctx context.Context, params *glueSDK.GetCatalogsInput, optFns ...func(*glueSDK.Options)) (*glueSDK.GetCatalogsOutput, error)
+}
+
+func (m *mockGlueClient) GetCatalog(ctx context.Context, params *glueSDK.GetCatalogInput, optFns ...func(*glueSDK.Options)) (*glueSDK.GetCatalogOutput, error) {
+	return m.getCatalogFn(ctx, params, optFns...)
+}
+func (m *mockGlueClient) GetCatalogs(ctx context.Context, params *glueSDK.GetCatalogsInput, optFns ...func(*glueSDK.Options)) (*glueSDK.GetCatalogsOutput, error) {
+	return m.getCatalogsFn(ctx, params, optFns...)
 }
 
 // ---------------------------------------------------------------------------
@@ -101,17 +125,26 @@ func newTestDB(t testing.TB, mock athenaClientAPI) *databaseImpl {
 		schema:           "default",
 		outputLocation:   "s3://test-bucket/results/",
 		authType:         AuthTypeDefault,
-		testClient:       mock,
+		testAthenaClient: mock,
 	}
 }
 
 // newTestConn builds a connectionImpl directly with the mock client, bypassing
 // driverbase.Open and AWS credential resolution entirely.
-func newTestConn(t testing.TB, mock athenaClientAPI) *connectionImpl {
-	db := newTestDB(t, mock)
+func newTestConn(t testing.TB, athenaMock athenaClientAPI, glueMock glueClientAPI) *connectionImpl {
+	return newTestConnWithWorkGroup(t, athenaMock, glueMock, nil)
+}
+
+func newTestConnWithWorkGroup(t testing.TB, athenaMock athenaClientAPI, glueMock glueClientAPI, workGroup *string) *connectionImpl {
+	t.Helper()
+	db := newTestDB(t, athenaMock)
+	if workGroup != nil {
+		db.workGroup = *workGroup
+	}
 	return &connectionImpl{
 		ConnectionImplBase: driverbase.NewConnectionImplBase(&db.DatabaseImplBase),
-		athenaClient:       mock,
+		athenaClient:       athenaMock,
+		glueClient:         glueMock,
 		db:                 db,
 		catalog:            db.catalog,
 		schema:             db.schema,
@@ -119,8 +152,8 @@ func newTestConn(t testing.TB, mock athenaClientAPI) *connectionImpl {
 }
 
 // newTestStmt creates a statementImpl attached to a test connection.
-func newTestStmt(t testing.TB, mock athenaClientAPI) *statementImpl {
-	conn := newTestConn(t, mock)
+func newTestStmt(t testing.TB, athenaMock athenaClientAPI) *statementImpl {
+	conn := newTestConn(t, athenaMock, nil)
 	return &statementImpl{
 		StatementImplBase: driverbase.NewStatementImplBase(&conn.ConnectionImplBase, conn.ErrorHelper),
 		conn:              conn,
@@ -190,7 +223,7 @@ func TestFunctional_SimpleSelectQuery(t *testing.T) {
 	}
 
 	stmt := newTestStmt(t, mock)
-	require.NoError(t, stmt.SetSqlQuery("SELECT 42 AS n"))
+	require.NoError(t, stmt.SetSqlQuery(context.Background(),"SELECT 42 AS n"))
 
 	rdr, rowCount, err := stmt.ExecuteQuery(context.Background())
 	require.NoError(t, err)
@@ -228,7 +261,7 @@ func TestFunctional_QueryFailure(t *testing.T) {
 	}
 
 	stmt := newTestStmt(t, mock)
-	require.NoError(t, stmt.SetSqlQuery("SELECT * FROM nonexistent_table"))
+	require.NoError(t, stmt.SetSqlQuery(context.Background(),"SELECT * FROM nonexistent_table"))
 
 	_, _, err := stmt.ExecuteQuery(context.Background())
 	require.Error(t, err)
@@ -258,7 +291,7 @@ func TestFunctional_QueryCancelled(t *testing.T) {
 	}
 
 	stmt := newTestStmt(t, mock)
-	require.NoError(t, stmt.SetSqlQuery("SELECT 1"))
+	require.NoError(t, stmt.SetSqlQuery(context.Background(),"SELECT 1"))
 
 	_, _, err := stmt.ExecuteQuery(context.Background())
 	require.Error(t, err)
@@ -293,7 +326,7 @@ func TestFunctional_ContextCancellationMidPoll(t *testing.T) {
 	}
 
 	stmt := newTestStmt(t, mock)
-	require.NoError(t, stmt.SetSqlQuery("SELECT sleep(60)"))
+	require.NoError(t, stmt.SetSqlQuery(context.Background(),"SELECT sleep(60)"))
 
 	_, _, err := stmt.ExecuteQuery(ctx)
 	require.Error(t, err)
@@ -349,7 +382,7 @@ func TestFunctional_MultiPageResults(t *testing.T) {
 	}
 
 	stmt := newTestStmt(t, mock)
-	require.NoError(t, stmt.SetSqlQuery("SELECT id FROM t"))
+	require.NoError(t, stmt.SetSqlQuery(context.Background(),"SELECT id FROM t"))
 
 	rdr, _, err := stmt.ExecuteQuery(context.Background())
 	require.NoError(t, err)
@@ -371,14 +404,14 @@ func TestFunctional_MultiPageResults(t *testing.T) {
 // TestFunctional_GetTableSchema verifies GetTableSchema calls GetTableMetadata
 // and converts the result to a correct Arrow schema.
 func TestFunctional_GetTableSchema(t *testing.T) {
-	mock := &mockAthenaClient{
+	athenaMock := &mockAthenaClient{
 		getTableMetadataFn: func(_ context.Context, params *athenaSDK.GetTableMetadataInput, _ ...func(*athenaSDK.Options)) (*athenaSDK.GetTableMetadataOutput, error) {
-			assert.Equal(t, "AwsDataCatalog", *params.CatalogName)
-			assert.Equal(t, "mydb", *params.DatabaseName)
-			assert.Equal(t, "mytable", *params.TableName)
+			assert.Equal(t, "my_catalog", *params.CatalogName)
+			assert.Equal(t, "my_db", *params.DatabaseName)
+			assert.Equal(t, "my_table", *params.TableName)
 			return &athenaSDK.GetTableMetadataOutput{
 				TableMetadata: &types.TableMetadata{
-					Name: strp("mytable"),
+					Name: strp("my_table"),
 					Columns: []types.Column{
 						{Name: strp("id"), Type: strp("bigint")},
 						{Name: strp("name"), Type: strp("varchar")},
@@ -389,9 +422,10 @@ func TestFunctional_GetTableSchema(t *testing.T) {
 		},
 	}
 
-	conn := newTestConn(t, mock)
-	dbSchema := "mydb"
-	schema, err := conn.GetTableSchema(context.Background(), nil, &dbSchema, "mytable")
+	conn := newTestConn(t, athenaMock, nil)
+	catalogName := "my_catalog"
+	schemaName := "my_db"
+	schema, err := conn.GetTableSchema(context.Background(), &catalogName, &schemaName, "my_table")
 	require.NoError(t, err)
 	require.NotNil(t, schema)
 
@@ -403,7 +437,7 @@ func TestFunctional_GetTableSchema(t *testing.T) {
 
 // TestFunctional_ListCatalogs verifies the ListDataCatalogs pagination path.
 func TestFunctional_ListCatalogs(t *testing.T) {
-	mock := &mockAthenaClient{
+	athenaMock := &mockAthenaClient{
 		listDataCatalogsFn: func(_ context.Context, _ *athenaSDK.ListDataCatalogsInput, _ ...func(*athenaSDK.Options)) (*athenaSDK.ListDataCatalogsOutput, error) {
 			return &athenaSDK.ListDataCatalogsOutput{
 				DataCatalogsSummary: []types.DataCatalogSummary{
@@ -413,18 +447,188 @@ func TestFunctional_ListCatalogs(t *testing.T) {
 			}, nil
 		},
 	}
+	glueMock := &mockGlueClient{
+		getCatalogsFn: func(_ context.Context, _ *glueSDK.GetCatalogsInput, _ ...func(*glueSDK.Options)) (*glueSDK.GetCatalogsOutput, error) {
+			return &glueSDK.GetCatalogsOutput{}, nil
+		},
+	}
 
-	conn := newTestConn(t, mock)
-	conn.catalog = "" // force the paginator path rather than the shortcut
-
+	conn := newTestConn(t, athenaMock, glueMock)
 	catalogs, err := conn.GetCatalogs(context.Background(), nil)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"AwsDataCatalog", "MyGlueCatalog"}, catalogs)
 }
 
+// TestFunctional_ListCatalogs_RecursivelyListsGlueCatalogs verifies Glue GetCatalogs is called with the recursive option
+func TestFunctional_ListCatalogs_RecursivelyListsGlueCatalogs(t *testing.T) {
+	athenaMock := &mockAthenaClient{
+		listDataCatalogsFn: func(_ context.Context, _ *athenaSDK.ListDataCatalogsInput, _ ...func(*athenaSDK.Options)) (*athenaSDK.ListDataCatalogsOutput, error) {
+			return &athenaSDK.ListDataCatalogsOutput{
+				DataCatalogsSummary: []types.DataCatalogSummary{
+					{CatalogName: strp("AwsDataCatalog")},
+					{CatalogName: strp("MyGlueCatalog")},
+				},
+			}, nil
+		},
+	}
+	glueMock := &mockGlueClient{
+		getCatalogsFn: func(_ context.Context, params *glueSDK.GetCatalogsInput, _ ...func(*glueSDK.Options)) (*glueSDK.GetCatalogsOutput, error) {
+			assert.True(t, params.Recursive, "Glue GetCatalogs should be called with the recursive option")
+			return &glueSDK.GetCatalogsOutput{
+				CatalogList: []glueTypes.Catalog{
+					{CatalogId: strp("111111111111:my_glue_catalog")},
+				},
+			}, nil
+		},
+	}
+
+	conn := newTestConn(t, athenaMock, glueMock)
+	catalogs, err := conn.GetCatalogs(context.Background(), nil)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"AwsDataCatalog", "MyGlueCatalog", "my_glue_catalog"}, catalogs)
+}
+
+// TestFunctional_ListCatalogs_WithEmptyCatalogName verifies the GetCatalogs short circuits when given an empty string
+func TestFunctional_ListCatalogs_WithEmptyCatalogName(t *testing.T) {
+	athenaMock := &mockAthenaClient{
+		listDataCatalogsFn: func(_ context.Context, _ *athenaSDK.ListDataCatalogsInput, _ ...func(*athenaSDK.Options)) (*athenaSDK.ListDataCatalogsOutput, error) {
+			t.Fatal("ListDataCatalogs should not be called")
+			return nil, nil
+		},
+	}
+	glueMock := &mockGlueClient{
+		getCatalogsFn: func(_ context.Context, _ *glueSDK.GetCatalogsInput, _ ...func(*glueSDK.Options)) (*glueSDK.GetCatalogsOutput, error) {
+			t.Fatal("GetCatalogs should not be called")
+			return nil, nil
+		},
+	}
+
+	conn := newTestConn(t, athenaMock, glueMock)
+	emptyString := ""
+	catalogs, err := conn.GetCatalogs(context.Background(), &emptyString)
+	require.NoError(t, err)
+	assert.Equal(t, []string{}, catalogs)
+}
+
+// TestFunctional_ListCatalogs_WithFilter verifies the catalogs are filtered by the specified pattern
+func TestFunctional_ListCatalogs_WithFilter(t *testing.T) {
+	athenaMock := &mockAthenaClient{
+		listDataCatalogsFn: func(_ context.Context, _ *athenaSDK.ListDataCatalogsInput, _ ...func(*athenaSDK.Options)) (*athenaSDK.ListDataCatalogsOutput, error) {
+			return &athenaSDK.ListDataCatalogsOutput{
+				DataCatalogsSummary: []types.DataCatalogSummary{
+					{CatalogName: strp("AwsDataCatalog")},
+					{CatalogName: strp("MyGlueCatalog")},
+				},
+			}, nil
+		},
+	}
+	glueMock := &mockGlueClient{
+		getCatalogsFn: func(_ context.Context, params *glueSDK.GetCatalogsInput, _ ...func(*glueSDK.Options)) (*glueSDK.GetCatalogsOutput, error) {
+			assert.True(t, params.Recursive, "Glue GetCatalogs should be called with the recursive option")
+			return &glueSDK.GetCatalogsOutput{
+				CatalogList: []glueTypes.Catalog{
+					{CatalogId: strp("111111111111:my_glue_catalog")},
+					{CatalogId: strp("111111111111:my-glue_catalog")},
+					{CatalogId: strp("222222222222:another_glue_catalog")},
+				},
+			}, nil
+		},
+	}
+
+	conn := newTestConn(t, athenaMock, glueMock)
+	catalogs, err := conn.GetCatalogs(context.Background(), strp("my%"))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"MyGlueCatalog", "my_glue_catalog", "my-glue_catalog"}, catalogs)
+	catalogs, err = conn.GetCatalogs(context.Background(), strp("my\\_glue%"))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"my_glue_catalog"}, catalogs)
+}
+
+func TestFunctional_ListCatalogs_WithNonWildcardName(t *testing.T) {
+	athenaMock := &mockAthenaClient{
+		getDataCatalogFn: func(_ context.Context, params *athenaSDK.GetDataCatalogInput, _ ...func(*athenaSDK.Options)) (*athenaSDK.GetDataCatalogOutput, error) {
+			if *params.Name == "SomeDataCatalog" {
+				return &athenaSDK.GetDataCatalogOutput{
+					DataCatalog: &athenaTypes.DataCatalog{
+						Name: strp("SomeDataCatalog"),
+					},
+				}, nil
+			} else {
+				return nil, &types.InvalidRequestException{Message: strp("Not found")}
+			}
+		},
+	}
+	glueMock := &mockGlueClient{
+		getCatalogFn: func(_ context.Context, params *glueSDK.GetCatalogInput, _ ...func(*glueSDK.Options)) (*glueSDK.GetCatalogOutput, error) {
+			if *params.CatalogId == "my_glue_catalog" {
+				return &glueSDK.GetCatalogOutput{
+					Catalog: &glueTypes.Catalog{
+						CatalogId: strp("111111111111:my_glue_catalog"),
+						Name:      strp("my_glue_catalog"),
+					},
+				}, nil
+			} else {
+				return nil, &glueTypes.EntityNotFoundException{Message: strp("Not found")}
+			}
+		},
+	}
+
+	conn := newTestConn(t, athenaMock, glueMock)
+	catalogs, err := conn.GetCatalogs(context.Background(), strp("SomeDataCatalog"))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"SomeDataCatalog"}, catalogs)
+	catalogs, err = conn.GetCatalogs(context.Background(), strp("my\\_glue\\_catalog"))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"my_glue_catalog"}, catalogs)
+}
+
+func TestFunctional_CheckCatalog_ReturnsFullNameFromGlueCatalogId(t *testing.T) {
+	athenaMock := &mockAthenaClient{
+		getDataCatalogFn: func(_ context.Context, _ *athenaSDK.GetDataCatalogInput, _ ...func(*athenaSDK.Options)) (*athenaSDK.GetDataCatalogOutput, error) {
+			return nil, &types.InvalidRequestException{Message: strp("Not found")}
+		},
+	}
+	glueMock := &mockGlueClient{
+		getCatalogFn: func(_ context.Context, params *glueSDK.GetCatalogInput, _ ...func(*glueSDK.Options)) (*glueSDK.GetCatalogOutput, error) {
+			assert.Equal(t, "s3tablescatalog/my-table-bucket", *params.CatalogId)
+			return &glueSDK.GetCatalogOutput{
+				Catalog: &glueTypes.Catalog{
+					CatalogId: strp("111111111111:s3tablescatalog/my-table-bucket"),
+					Name:      strp("my-table-bucket"),
+				},
+			}, nil
+		},
+	}
+
+	conn := newTestConn(t, athenaMock, glueMock)
+	catalogs, err := conn.GetCatalogs(context.Background(), strp("s3tablescatalog/my-table-bucket"))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"s3tablescatalog/my-table-bucket"}, catalogs)
+}
+
+func TestFunctional_ListCatalogs_WithAwsDataCatalog(t *testing.T) {
+	athenaMock := &mockAthenaClient{
+		getDataCatalogFn: func(_ context.Context, params *athenaSDK.GetDataCatalogInput, _ ...func(*athenaSDK.Options)) (*athenaSDK.GetDataCatalogOutput, error) {
+			t.Fatal("GetDataCatalog should not be called")
+			return nil, nil
+		},
+	}
+	glueMock := &mockGlueClient{
+		getCatalogFn: func(_ context.Context, params *glueSDK.GetCatalogInput, _ ...func(*glueSDK.Options)) (*glueSDK.GetCatalogOutput, error) {
+			t.Fatal("GetCatalog should not be called")
+			return nil, nil
+		},
+	}
+
+	conn := newTestConn(t, athenaMock, glueMock)
+	catalogs, err := conn.GetCatalogs(context.Background(), strp("AwsDataCatalog"))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"AwsDataCatalog"}, catalogs)
+}
+
 // TestFunctional_ListSchemas verifies the ListDatabases pagination path.
 func TestFunctional_ListSchemas(t *testing.T) {
-	mock := &mockAthenaClient{
+	athenaMock := &mockAthenaClient{
 		listDatabasesFn: func(_ context.Context, params *athenaSDK.ListDatabasesInput, _ ...func(*athenaSDK.Options)) (*athenaSDK.ListDatabasesOutput, error) {
 			assert.Equal(t, "AwsDataCatalog", *params.CatalogName)
 			return &athenaSDK.ListDatabasesOutput{
@@ -436,8 +640,572 @@ func TestFunctional_ListSchemas(t *testing.T) {
 		},
 	}
 
-	conn := newTestConn(t, mock)
+	conn := newTestConn(t, athenaMock, nil)
 	schemas, err := conn.GetDBSchemasForCatalog(context.Background(), "AwsDataCatalog", nil)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"default", "analytics"}, schemas)
+}
+
+// TestFunctional_ListSchemas_WithEmptyCatalogName verifies GetDBSchemasForCatalog short circuits when the catalog name is empty
+func TestFunctional_ListSchemas_WithEmptyCatalogName(t *testing.T) {
+	athenaMock := &mockAthenaClient{
+		listDatabasesFn: func(_ context.Context, params *athenaSDK.ListDatabasesInput, _ ...func(*athenaSDK.Options)) (*athenaSDK.ListDatabasesOutput, error) {
+			t.Fatal("ListDatabases should not be called")
+			return nil, nil
+		},
+	}
+
+	conn := newTestConn(t, athenaMock, nil)
+	schemas, err := conn.GetDBSchemasForCatalog(context.Background(), "", nil)
+	require.NoError(t, err)
+	assert.Equal(t, []string{}, schemas)
+}
+
+// TestFunctional_ListSchemas_WithEmptySchemaName verifies GetDBSchemasForCatalog short circuits when the schema name is empty
+func TestFunctional_ListSchemas_WithEmptySchemaName(t *testing.T) {
+	athenaMock := &mockAthenaClient{
+		listDatabasesFn: func(_ context.Context, params *athenaSDK.ListDatabasesInput, _ ...func(*athenaSDK.Options)) (*athenaSDK.ListDatabasesOutput, error) {
+			t.Fatal("ListDatabases should not be called")
+			return nil, nil
+		},
+	}
+
+	conn := newTestConn(t, athenaMock, nil)
+	emptyString := ""
+	schemas, err := conn.GetDBSchemasForCatalog(context.Background(), "AwsDataCatalog", &emptyString)
+	require.NoError(t, err)
+	assert.Equal(t, []string{}, schemas)
+}
+
+// TestFunctional_ListSchemas_WithFilter verifies the schemas are filtered by the specified pattern
+func TestFunctional_ListSchemas_WithFilter(t *testing.T) {
+	athenaMock := &mockAthenaClient{
+		listDatabasesFn: func(_ context.Context, params *athenaSDK.ListDatabasesInput, _ ...func(*athenaSDK.Options)) (*athenaSDK.ListDatabasesOutput, error) {
+			assert.Equal(t, "AwsDataCatalog", *params.CatalogName)
+			return &athenaSDK.ListDatabasesOutput{
+				DatabaseList: []types.Database{
+					{Name: strp("default")},
+					{Name: strp("analytics")},
+					{Name: strp("another_schema")},
+					{Name: strp("another-schema")},
+					{Name: strp("schema_four")},
+				},
+			}, nil
+		},
+	}
+
+	conn := newTestConn(t, athenaMock, nil)
+	schemas, err := conn.GetDBSchemasForCatalog(context.Background(), "AwsDataCatalog", strp("%schema%"))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"another_schema", "another-schema", "schema_four"}, schemas)
+	schemas, err = conn.GetDBSchemasForCatalog(context.Background(), "AwsDataCatalog", strp("another\\_sch%"))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"another_schema"}, schemas)
+}
+
+func TestFunctional_ListSchemas_WithNonWildcardName(t *testing.T) {
+	athenaMock := &mockAthenaClient{
+		getDatabaseFn: func(_ context.Context, params *athenaSDK.GetDatabaseInput, _ ...func(*athenaSDK.Options)) (*athenaSDK.GetDatabaseOutput, error) {
+			assert.Equal(t, "AwsDataCatalog", *params.CatalogName)
+			assert.Equal(t, "another_schema", *params.DatabaseName)
+			return &athenaSDK.GetDatabaseOutput{
+				Database: &types.Database{
+					Name: strp("another_schema"),
+				},
+			}, nil
+		},
+	}
+
+	conn := newTestConn(t, athenaMock, nil)
+	schemas, err := conn.GetDBSchemasForCatalog(context.Background(), "AwsDataCatalog", strp("another\\_schema"))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"another_schema"}, schemas)
+}
+
+// TestFunctional_ListSchemas_SkipsMetadataException verifies that
+// GetDBSchemasForCatalog returns an empty list (not an error) when
+// ListDatabases returns a MetadataException.
+func TestFunctional_ListSchemas_SkipsMetadataException(t *testing.T) {
+	athenaMock := &mockAthenaClient{
+		listDatabasesFn: func(_ context.Context, _ *athenaSDK.ListDatabasesInput, _ ...func(*athenaSDK.Options)) (*athenaSDK.ListDatabasesOutput, error) {
+			return nil, &types.MetadataException{Message: strp("The specified bucket does not exist")}
+		},
+	}
+
+	conn := newTestConn(t, athenaMock, nil)
+	schemas, err := conn.GetDBSchemasForCatalog(context.Background(), "some_glue_catalog", nil)
+	require.NoError(t, err)
+	assert.Empty(t, schemas)
+}
+
+// TestFunctional_GetTablesForDBSchema verifies the happy path with a wildcard
+// filter: parameters are forwarded correctly and returned tables are mapped to TableInfo.
+func TestFunctional_GetTablesForDBSchema(t *testing.T) {
+	athenaMock := &mockAthenaClient{
+		listTableMetadataFn: func(_ context.Context, params *athenaSDK.ListTableMetadataInput, _ ...func(*athenaSDK.Options)) (*athenaSDK.ListTableMetadataOutput, error) {
+			assert.Equal(t, "cat", *params.CatalogName)
+			assert.Equal(t, "db", *params.DatabaseName)
+			assert.Equal(t, "(?i)^tbl.*$", *params.Expression)
+			return &athenaSDK.ListTableMetadataOutput{
+				TableMetadataList: []types.TableMetadata{
+					{
+						Name:      strp("tbl"),
+						TableType: strp("EXTERNAL_TABLE"),
+					},
+				},
+			}, nil
+		},
+	}
+
+	conn := newTestConn(t, athenaMock, nil)
+	tableFilter := "tbl%"
+	tables, err := conn.GetTablesForDBSchema(context.Background(), "cat", "db", &tableFilter, nil, false)
+	require.NoError(t, err)
+	require.Len(t, tables, 1)
+
+	assert.Equal(t, "tbl", tables[0].TableName)
+	assert.Equal(t, "EXTERNAL_TABLE", tables[0].TableType)
+	assert.Empty(t, tables[0].TableColumns)
+}
+
+// TestFunctional_GetTablesForDBSchema_WithColumns verifies that column metadata
+// is populated when includeColumns is true.
+func TestFunctional_GetTablesForDBSchema_WithColumns(t *testing.T) {
+	athenaMock := &mockAthenaClient{
+		listTableMetadataFn: func(_ context.Context, _ *athenaSDK.ListTableMetadataInput, _ ...func(*athenaSDK.Options)) (*athenaSDK.ListTableMetadataOutput, error) {
+			return &athenaSDK.ListTableMetadataOutput{
+				TableMetadataList: []types.TableMetadata{
+					{
+						Name:      strp("events"),
+						TableType: strp("EXTERNAL_TABLE"),
+						Columns: []types.Column{
+							{Name: strp("event_id"), Type: strp("bigint")},
+							{Name: strp("event_name"), Type: strp("varchar")},
+							{Name: strp("created_at"), Type: strp("timestamp")},
+						},
+					},
+				},
+			}, nil
+		},
+	}
+
+	conn := newTestConn(t, athenaMock, nil)
+	tables, err := conn.GetTablesForDBSchema(context.Background(), "cat", "db", nil, nil, true)
+	require.NoError(t, err)
+	require.Len(t, tables, 1)
+	require.Len(t, tables[0].TableColumns, 3)
+
+	col0 := tables[0].TableColumns[0]
+	assert.Equal(t, "event_id", col0.ColumnName)
+	assert.Equal(t, int32(1), *col0.OrdinalPosition)
+	assert.Equal(t, "bigint", *col0.XdbcTypeName)
+
+	col2 := tables[0].TableColumns[2]
+	assert.Equal(t, "created_at", col2.ColumnName)
+	assert.Equal(t, int32(3), *col2.OrdinalPosition)
+	assert.Equal(t, "timestamp", *col2.XdbcTypeName)
+}
+
+func TestFunctional_GetTablesForDBSchema_WithColumnFilter(t *testing.T) {
+	athenaMock := &mockAthenaClient{
+		getTableMetadataFn: func(_ context.Context, params *athenaSDK.GetTableMetadataInput, _ ...func(*athenaSDK.Options)) (*athenaSDK.GetTableMetadataOutput, error) {
+			assert.Equal(t, "events", *params.TableName)
+			return &athenaSDK.GetTableMetadataOutput{
+				TableMetadata: &types.TableMetadata{
+					Name:      strp("events"),
+					TableType: strp("EXTERNAL_TABLE"),
+					Columns: []types.Column{
+						{Name: strp("event_id"), Type: strp("bigint")},
+						{Name: strp("event_name"), Type: strp("varchar")},
+						{Name: strp("created_at"), Type: strp("timestamp")},
+					},
+				},
+			}, nil
+		},
+	}
+
+	conn := newTestConn(t, athenaMock, nil)
+	tables, err := conn.GetTablesForDBSchema(context.Background(), "cat", "db", strp("events"), strp("event%"), true)
+	require.NoError(t, err)
+	require.Len(t, tables, 1)
+	require.Len(t, tables[0].TableColumns, 2)
+
+	col0 := tables[0].TableColumns[0]
+	assert.Equal(t, "event_id", col0.ColumnName)
+	assert.Equal(t, int32(1), *col0.OrdinalPosition)
+	assert.Equal(t, "bigint", *col0.XdbcTypeName)
+
+	col2 := tables[0].TableColumns[1]
+	assert.Equal(t, "event_name", col2.ColumnName)
+	assert.Equal(t, int32(2), *col2.OrdinalPosition)
+	assert.Equal(t, "varchar", *col2.XdbcTypeName)
+}
+
+func TestFunctional_GetTablesForDBSchema_WithEmptyColumnFilter(t *testing.T) {
+	athenaMock := &mockAthenaClient{
+		getTableMetadataFn: func(_ context.Context, _ *athenaSDK.GetTableMetadataInput, _ ...func(*athenaSDK.Options)) (*athenaSDK.GetTableMetadataOutput, error) {
+			return &athenaSDK.GetTableMetadataOutput{
+				TableMetadata: &types.TableMetadata{
+					Name:      strp("events"),
+					TableType: strp("EXTERNAL_TABLE"),
+					Columns: []types.Column{
+						{Name: strp("event_id"), Type: strp("bigint")},
+						{Name: strp("event_name"), Type: strp("varchar")},
+						{Name: strp("created_at"), Type: strp("timestamp")},
+					},
+				},
+			}, nil
+		},
+	}
+
+	conn := newTestConn(t, athenaMock, nil)
+	tables, err := conn.GetTablesForDBSchema(context.Background(), "cat", "db", strp("events"), strp(""), true)
+	require.NoError(t, err)
+	require.Len(t, tables, 1)
+	require.Len(t, tables[0].TableColumns, 0)
+}
+
+// TestFunctional_GetTablesForDBSchema_NilTableFilter verifies that Expression
+// is not set when tableFilter is nil.
+func TestFunctional_GetTablesForDBSchema_NilTableFilter(t *testing.T) {
+	athenaMock := &mockAthenaClient{
+		listTableMetadataFn: func(_ context.Context, params *athenaSDK.ListTableMetadataInput, _ ...func(*athenaSDK.Options)) (*athenaSDK.ListTableMetadataOutput, error) {
+			assert.Nil(t, params.Expression)
+			return &athenaSDK.ListTableMetadataOutput{}, nil
+		},
+	}
+
+	conn := newTestConn(t, athenaMock, nil)
+	tables, err := conn.GetTablesForDBSchema(context.Background(), "cat", "db", nil, nil, false)
+	require.NoError(t, err)
+	assert.Empty(t, tables)
+}
+
+// TestFunctional_GetTablesForDBSchema_Patterns verifies that underscores and percent in the table are translated into regular expression syntax
+func TestFunctional_GetTablesForDBSchema_Patterns(t *testing.T) {
+	examples := map[string]string{
+		"my_table":         "(?i)^my.table$",
+		"my\\\\_table":     "(?i)^my\\\\.table$",
+		"my\\\\\\\\_table": "(?i)^my\\\\\\\\.table$",
+		"_t":               "(?i)^.t$",
+		"table_":           "(?i)^table.$",
+		"my______table":    "(?i)^my......table$",
+		"__table":          "(?i)^..table$",
+		"table____":        "(?i)^table....$",
+		"table%":           "(?i)^table.*$",
+		"%table%":          "(?i)^.*table.*$",
+		"%table":           "(?i)^.*table$",
+		"my%table":         "(?i)^my.*table$",
+		"my%%table":        "(?i)^my.*table$",
+		"my\\\\%table":     "(?i)^my\\\\.*table$",
+		"my\\\\\\\\%table": "(?i)^my\\\\\\\\.*table$",
+		"table%%%%":        "(?i)^table.*$",
+		"%%%%table":        "(?i)^.*table$",
+		"+abl%":            "(?i)^\\+abl.*$",
+	}
+
+	for tableFilter, expectedExpression := range examples {
+		athenaMock := &mockAthenaClient{
+			listTableMetadataFn: func(_ context.Context, params *athenaSDK.ListTableMetadataInput, _ ...func(*athenaSDK.Options)) (*athenaSDK.ListTableMetadataOutput, error) {
+				assert.Equal(t, expectedExpression, *params.Expression)
+				return &athenaSDK.ListTableMetadataOutput{}, nil
+			},
+		}
+
+		conn := newTestConn(t, athenaMock, nil)
+		_, err := conn.GetTablesForDBSchema(context.Background(), "cat", "db", &tableFilter, nil, false)
+		require.NoError(t, err)
+	}
+}
+
+// TestFunctional_GetTablesForDBSchema_NilTableFilter verifies that malformed table filters are not accepted
+func TestFunctional_GetTablesForDBSchema_MalformedTableFilter(t *testing.T) {
+	conn := newTestConn(t, nil, nil)
+	_, err := conn.GetTablesForDBSchema(context.Background(), "cat", "db", strp("tbl\\"), nil, false)
+	assert.ErrorContains(t, err, "pattern cannot end with an escape")
+}
+
+// TestFunctional_GetTablesForDBSchema_EmptyTableFilter verifies that GetTablesForDBSchema
+// short circuits when the table name filter is an empty string
+func TestFunctional_GetTablesForDBSchema_EmptyTableFilter(t *testing.T) {
+	athenaMock := &mockAthenaClient{
+		listTableMetadataFn: func(_ context.Context, params *athenaSDK.ListTableMetadataInput, _ ...func(*athenaSDK.Options)) (*athenaSDK.ListTableMetadataOutput, error) {
+			t.Fatal("ListTableMetadata should not be called")
+			return &athenaSDK.ListTableMetadataOutput{}, nil
+		},
+	}
+
+	conn := newTestConn(t, athenaMock, nil)
+	empty := ""
+	tables, err := conn.GetTablesForDBSchema(context.Background(), "cat", "db", &empty, nil, false)
+	require.NoError(t, err)
+	assert.Empty(t, tables)
+}
+
+// TestFunctional_GetTablesForDBSchema_SkipsNilName verifies that table entries
+// with a nil Name are skipped.
+func TestFunctional_GetTablesForDBSchema_SkipsNilName(t *testing.T) {
+	athenaMock := &mockAthenaClient{
+		listTableMetadataFn: func(_ context.Context, _ *athenaSDK.ListTableMetadataInput, _ ...func(*athenaSDK.Options)) (*athenaSDK.ListTableMetadataOutput, error) {
+			return &athenaSDK.ListTableMetadataOutput{
+				TableMetadataList: []types.TableMetadata{
+					{Name: nil, TableType: strp("EXTERNAL_TABLE")},
+					{Name: strp("valid_table"), TableType: strp("EXTERNAL_TABLE")},
+				},
+			}, nil
+		},
+	}
+
+	conn := newTestConn(t, athenaMock, nil)
+	tables, err := conn.GetTablesForDBSchema(context.Background(), "cat", "db", nil, nil, false)
+	require.NoError(t, err)
+	require.Len(t, tables, 1)
+	assert.Equal(t, "valid_table", tables[0].TableName)
+}
+
+// TestFunctional_GetTablesForDBSchema_DefaultsTableType verifies that tables
+// with nil TableType default to "EXTERNAL_TABLE".
+func TestFunctional_GetTablesForDBSchema_DefaultsTableType(t *testing.T) {
+	athenaMock := &mockAthenaClient{
+		listTableMetadataFn: func(_ context.Context, _ *athenaSDK.ListTableMetadataInput, _ ...func(*athenaSDK.Options)) (*athenaSDK.ListTableMetadataOutput, error) {
+			return &athenaSDK.ListTableMetadataOutput{
+				TableMetadataList: []types.TableMetadata{
+					{Name: strp("my_table"), TableType: nil},
+				},
+			}, nil
+		},
+	}
+
+	conn := newTestConn(t, athenaMock, nil)
+	tables, err := conn.GetTablesForDBSchema(context.Background(), "cat", "db", nil, nil, false)
+	require.NoError(t, err)
+	require.Len(t, tables, 1)
+	assert.Equal(t, "EXTERNAL_TABLE", tables[0].TableType)
+}
+
+// TestFunctional_GetTablesForDBSchema_NormalizesTableType verifies that
+// unknown table types are normalized to known types from ListTableTypes.
+func TestFunctional_GetTablesForDBSchema_NormalizesTableType(t *testing.T) {
+	athenaMock := &mockAthenaClient{
+		listTableMetadataFn: func(_ context.Context, _ *athenaSDK.ListTableMetadataInput, _ ...func(*athenaSDK.Options)) (*athenaSDK.ListTableMetadataOutput, error) {
+			return &athenaSDK.ListTableMetadataOutput{
+				TableMetadataList: []types.TableMetadata{
+					{Name: strp("t1"), TableType: strp("EXTERNAL_TABLE")},
+					{Name: strp("t2"), TableType: strp("MANAGED_TABLE")},
+					{Name: strp("t3"), TableType: strp("VIRTUAL_VIEW")},
+					{Name: strp("t4"), TableType: strp("EXTERNAL")},
+					{Name: strp("t5"), TableType: strp("VIEW")},
+					{Name: strp("t6"), TableType: strp("TABLE")},
+					{Name: strp("t7"), TableType: strp("")},
+					{Name: strp("t8"), TableType: nil},
+				},
+			}, nil
+		},
+	}
+
+	conn := newTestConn(t, athenaMock, nil)
+	tables, err := conn.GetTablesForDBSchema(context.Background(), "cat", "db", nil, nil, false)
+	require.NoError(t, err)
+	require.Len(t, tables, 8)
+	assert.Equal(t, "EXTERNAL_TABLE", tables[0].TableType)
+	assert.Equal(t, "EXTERNAL_TABLE", tables[1].TableType)
+	assert.Equal(t, "VIRTUAL_VIEW", tables[2].TableType)
+	assert.Equal(t, "EXTERNAL_TABLE", tables[3].TableType)
+	assert.Equal(t, "EXTERNAL_TABLE", tables[4].TableType)
+	assert.Equal(t, "EXTERNAL_TABLE", tables[5].TableType)
+	assert.Equal(t, "EXTERNAL_TABLE", tables[6].TableType)
+	assert.Equal(t, "EXTERNAL_TABLE", tables[7].TableType)
+}
+
+// TestFunctional_GetTablesForDBSchema_APIError verifies that a ListTableMetadata
+// error is wrapped as an adbc.Error with StatusIO.
+func TestFunctional_GetTablesForDBSchema_APIError(t *testing.T) {
+	athenaMock := &mockAthenaClient{
+		listTableMetadataFn: func(_ context.Context, _ *athenaSDK.ListTableMetadataInput, _ ...func(*athenaSDK.Options)) (*athenaSDK.ListTableMetadataOutput, error) {
+			return nil, fmt.Errorf("throttled")
+		},
+	}
+
+	conn := newTestConn(t, athenaMock, nil)
+	_, err := conn.GetTablesForDBSchema(context.Background(), "cat", "db", nil, nil, false)
+	require.Error(t, err)
+	var adbcErr adbc.Error
+	require.ErrorAs(t, err, &adbcErr)
+	assert.Equal(t, adbc.StatusIO, adbcErr.Code)
+	assert.Contains(t, adbcErr.Msg, "ListTableMetadata failed")
+}
+
+func TestFunctional_GetTablesForDBSchema_SkipsMetadataException(t *testing.T) {
+	athenaMock := &mockAthenaClient{
+		listTableMetadataFn: func(_ context.Context, _ *athenaSDK.ListTableMetadataInput, _ ...func(*athenaSDK.Options)) (*athenaSDK.ListTableMetadataOutput, error) {
+			return nil, &types.MetadataException{Message: strp("not possible!")}
+		},
+	}
+
+	conn := newTestConn(t, athenaMock, nil)
+	tables, err := conn.GetTablesForDBSchema(context.Background(), "cat", "db", nil, nil, true)
+	require.NoError(t, err)
+	assert.Empty(t, tables)
+}
+
+// TestFunctional_GetTablesForDBSchema_WithNonWildcardName verifies that
+// GetTableMetadata is used instead of ListTableMetadata when the table filter
+// has no wildcards.
+func TestFunctional_GetTablesForDBSchema_WithNonWildcardName(t *testing.T) {
+	athenaMock := &mockAthenaClient{
+		getTableMetadataFn: func(_ context.Context, params *athenaSDK.GetTableMetadataInput, _ ...func(*athenaSDK.Options)) (*athenaSDK.GetTableMetadataOutput, error) {
+			assert.Equal(t, "my_catalog", *params.CatalogName)
+			assert.Equal(t, "my_db", *params.DatabaseName)
+			assert.Equal(t, "my_table", *params.TableName)
+			return &athenaSDK.GetTableMetadataOutput{
+				TableMetadata: &types.TableMetadata{
+					Name:      strp("my_table"),
+					TableType: strp("EXTERNAL_TABLE"),
+					Columns: []types.Column{
+						{Name: strp("id"), Type: strp("bigint")},
+						{Name: strp("name"), Type: strp("varchar")},
+					},
+				},
+			}, nil
+		},
+		listTableMetadataFn: func(_ context.Context, _ *athenaSDK.ListTableMetadataInput, _ ...func(*athenaSDK.Options)) (*athenaSDK.ListTableMetadataOutput, error) {
+			t.Fatal("ListTableMetadata should not be called")
+			return nil, nil
+		},
+	}
+
+	conn := newTestConn(t, athenaMock, nil)
+	filter := "my\\_table"
+	tables, err := conn.GetTablesForDBSchema(context.Background(), "my_catalog", "my_db", &filter, nil, true)
+	require.NoError(t, err)
+	require.Len(t, tables, 1)
+	assert.Equal(t, "my_table", tables[0].TableName)
+	assert.Equal(t, "EXTERNAL_TABLE", tables[0].TableType)
+	require.Len(t, tables[0].TableColumns, 2)
+	assert.Equal(t, "id", tables[0].TableColumns[0].ColumnName)
+	assert.Equal(t, "name", tables[0].TableColumns[1].ColumnName)
+}
+
+func TestFunctional_WorkGroup_GetDataCatalog(t *testing.T) {
+	athenaMock := &mockAthenaClient{
+		getDataCatalogFn: func(_ context.Context, params *athenaSDK.GetDataCatalogInput, _ ...func(*athenaSDK.Options)) (*athenaSDK.GetDataCatalogOutput, error) {
+			require.NotNil(t, params.WorkGroup)
+			assert.Equal(t, "my-workgroup", *params.WorkGroup)
+			return &athenaSDK.GetDataCatalogOutput{
+				DataCatalog: &athenaTypes.DataCatalog{
+					Name: params.Name,
+				},
+			}, nil
+		},
+	}
+	glueMock := &mockGlueClient{
+		getCatalogFn: func(_ context.Context, _ *glueSDK.GetCatalogInput, _ ...func(*glueSDK.Options)) (*glueSDK.GetCatalogOutput, error) {
+			return nil, &glueTypes.EntityNotFoundException{Message: strp("not found")}
+		},
+	}
+
+	conn := newTestConnWithWorkGroup(t, athenaMock, glueMock, strp("my-workgroup"))
+	catalogs, err := conn.GetCatalogs(context.Background(), strp("MyCatalog"))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"MyCatalog"}, catalogs)
+}
+
+func TestFunctional_WorkGroup_ListDataCatalogs(t *testing.T) {
+	athenaMock := &mockAthenaClient{
+		listDataCatalogsFn: func(_ context.Context, params *athenaSDK.ListDataCatalogsInput, _ ...func(*athenaSDK.Options)) (*athenaSDK.ListDataCatalogsOutput, error) {
+			require.NotNil(t, params.WorkGroup)
+			assert.Equal(t, "my-workgroup", *params.WorkGroup)
+			return &athenaSDK.ListDataCatalogsOutput{
+				DataCatalogsSummary: []types.DataCatalogSummary{
+					{CatalogName: strp("AwsDataCatalog")},
+				},
+			}, nil
+		},
+	}
+	glueMock := &mockGlueClient{
+		getCatalogsFn: func(_ context.Context, _ *glueSDK.GetCatalogsInput, _ ...func(*glueSDK.Options)) (*glueSDK.GetCatalogsOutput, error) {
+			return &glueSDK.GetCatalogsOutput{}, nil
+		},
+	}
+
+	conn := newTestConnWithWorkGroup(t, athenaMock, glueMock, strp("my-workgroup"))
+	catalogs, err := conn.GetCatalogs(context.Background(), nil)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"AwsDataCatalog"}, catalogs)
+}
+
+func TestFunctional_WorkGroup_GetDatabase(t *testing.T) {
+	athenaMock := &mockAthenaClient{
+		getDatabaseFn: func(_ context.Context, params *athenaSDK.GetDatabaseInput, _ ...func(*athenaSDK.Options)) (*athenaSDK.GetDatabaseOutput, error) {
+			require.NotNil(t, params.WorkGroup)
+			assert.Equal(t, "my-workgroup", *params.WorkGroup)
+			return &athenaSDK.GetDatabaseOutput{
+				Database: &types.Database{Name: strp("my_db")},
+			}, nil
+		},
+	}
+
+	conn := newTestConnWithWorkGroup(t, athenaMock, nil, strp("my-workgroup"))
+	schemas, err := conn.GetDBSchemasForCatalog(context.Background(), "AwsDataCatalog", strp("my\\_db"))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"my_db"}, schemas)
+}
+
+func TestFunctional_WorkGroup_ListDatabases(t *testing.T) {
+	athenaMock := &mockAthenaClient{
+		listDatabasesFn: func(_ context.Context, params *athenaSDK.ListDatabasesInput, _ ...func(*athenaSDK.Options)) (*athenaSDK.ListDatabasesOutput, error) {
+			require.NotNil(t, params.WorkGroup)
+			assert.Equal(t, "my-workgroup", *params.WorkGroup)
+			return &athenaSDK.ListDatabasesOutput{
+				DatabaseList: []types.Database{{Name: strp("default")}},
+			}, nil
+		},
+	}
+
+	conn := newTestConnWithWorkGroup(t, athenaMock, nil, strp("my-workgroup"))
+	schemas, err := conn.GetDBSchemasForCatalog(context.Background(), "AwsDataCatalog", nil)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"default"}, schemas)
+}
+
+func TestFunctional_WorkGroup_GetTableMetadata(t *testing.T) {
+	athenaMock := &mockAthenaClient{
+		getTableMetadataFn: func(_ context.Context, params *athenaSDK.GetTableMetadataInput, _ ...func(*athenaSDK.Options)) (*athenaSDK.GetTableMetadataOutput, error) {
+			require.NotNil(t, params.WorkGroup)
+			assert.Equal(t, "my-workgroup", *params.WorkGroup)
+			return &athenaSDK.GetTableMetadataOutput{
+				TableMetadata: &types.TableMetadata{
+					Name:      strp("my_table"),
+					TableType: strp("EXTERNAL_TABLE"),
+				},
+			}, nil
+		},
+	}
+
+	conn := newTestConnWithWorkGroup(t, athenaMock, nil, strp("my-workgroup"))
+	filter := "my\\_table"
+	tables, err := conn.GetTablesForDBSchema(context.Background(), "cat", "db", &filter, nil, false)
+	require.NoError(t, err)
+	require.Len(t, tables, 1)
+	assert.Equal(t, "my_table", tables[0].TableName)
+}
+
+func TestFunctional_WorkGroup_ListTableMetadata(t *testing.T) {
+	athenaMock := &mockAthenaClient{
+		listTableMetadataFn: func(_ context.Context, params *athenaSDK.ListTableMetadataInput, _ ...func(*athenaSDK.Options)) (*athenaSDK.ListTableMetadataOutput, error) {
+			require.NotNil(t, params.WorkGroup)
+			assert.Equal(t, "my-workgroup", *params.WorkGroup)
+			return &athenaSDK.ListTableMetadataOutput{
+				TableMetadataList: []types.TableMetadata{
+					{Name: strp("tbl1"), TableType: strp("EXTERNAL_TABLE")},
+				},
+			}, nil
+		},
+	}
+
+	conn := newTestConnWithWorkGroup(t, athenaMock, nil, strp("my-workgroup"))
+	tables, err := conn.GetTablesForDBSchema(context.Background(), "cat", "db", nil, nil, false)
+	require.NoError(t, err)
+	require.Len(t, tables, 1)
+	assert.Equal(t, "tbl1", tables[0].TableName)
 }

@@ -43,7 +43,7 @@ func (s *statementImpl) Base() *driverbase.StatementImplBase {
 	return &s.StatementImplBase
 }
 
-func (s *statementImpl) Close() error {
+func (s *statementImpl) Close(_ context.Context) error {
 	if s.conn == nil {
 		return adbc.Error{
 			Msg:  "[athena] statement already closed",
@@ -54,11 +54,11 @@ func (s *statementImpl) Close() error {
 	return nil
 }
 
-func (s *statementImpl) SetOption(key, val string) error {
-	return s.StatementImplBase.SetOption(key, val)
+func (s *statementImpl) SetOption(ctx context.Context, key, val string) error {
+	return s.StatementImplBase.SetOption(ctx, key, val)
 }
 
-func (s *statementImpl) SetSqlQuery(query string) error {
+func (s *statementImpl) SetSqlQuery(_ context.Context, query string) error {
 	s.query = query
 	return nil
 }
@@ -390,14 +390,14 @@ func (s *statementImpl) BindStream(_ context.Context, _ array.RecordReader) erro
 	}
 }
 
-func (s *statementImpl) GetParameterSchema() (*arrow.Schema, error) {
+func (s *statementImpl) GetParameterSchema(_ context.Context) (*arrow.Schema, error) {
 	return nil, adbc.Error{
 		Code: adbc.StatusNotImplemented,
 		Msg:  "[athena] parameter schema detection not implemented",
 	}
 }
 
-func (s *statementImpl) SetSubstraitPlan(_ []byte) error {
+func (s *statementImpl) SetSubstraitPlan(_ context.Context, _ []byte) error {
 	return adbc.Error{
 		Code: adbc.StatusNotImplemented,
 		Msg:  "[athena] Substrait plans not supported",

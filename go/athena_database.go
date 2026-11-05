@@ -27,6 +27,7 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	athenaSDK "github.com/aws/aws-sdk-go-v2/service/athena"
+	glueSDK "github.com/aws/aws-sdk-go-v2/service/glue"
 
 	awsmiddleware "github.com/aws/aws-sdk-go-v2/aws/middleware"
 	"github.com/aws/smithy-go/middleware"
@@ -47,30 +48,38 @@ type databaseImpl struct {
 	sessionToken string
 	profileName  string
 
-	// testClient is non-nil only during testing. When set, Open uses it
-	// directly instead of constructing a real AWS SDK client.
-	testClient athenaClientAPI
+	// testAthenaClient and testGlueClient are non-nil only during testing. 
+	// When set, Open uses them directly instead of constructing real AWS SDK clients.
+	testAthenaClient athenaClientAPI
+	testGlueClient glueClientAPI
 }
 
-func (d *databaseImpl) Open(ctx context.Context) (adbc.Connection, error) {
-	var client athenaClientAPI
-	if d.testClient != nil {
-		client = d.testClient
+func (d *databaseImpl) Open(ctx context.Context) (adbc.ConnectionWithContext, error) {
+	var athenaClient athenaClientAPI
+	var glueClient glueClientAPI
+	if d.testAthenaClient != nil {
+		athenaClient = d.testAthenaClient
+		glueClient = d.testGlueClient
 	} else {
 		cfg, err := d.buildAWSConfig(ctx)
 		if err != nil {
 			return nil, err
 		}
-		client = athenaSDK.NewFromConfig(cfg, func(o *athenaSDK.Options) {
-			o.APIOptions = append(o.APIOptions, func(stack *middleware.Stack) error {
-				return awsmiddleware.AddUserAgentKeyValue("athena-adbc-go", driverVersion)(stack)
-			})
+		userAgentMiddleware := func(stack *middleware.Stack) error {
+			return awsmiddleware.AddUserAgentKeyValue("athena-adbc-go", driverVersion)(stack)
+		}
+		athenaClient = athenaSDK.NewFromConfig(cfg, func(o *athenaSDK.Options) {
+			o.APIOptions = append(o.APIOptions, userAgentMiddleware)
+		})
+		glueClient = glueSDK.NewFromConfig(cfg, func(o *glueSDK.Options) {
+			o.APIOptions = append(o.APIOptions, userAgentMiddleware)
 		})
 	}
 
 	conn := &connectionImpl{
 		ConnectionImplBase: driverbase.NewConnectionImplBase(&d.DatabaseImplBase),
-		athenaClient:       client,
+		athenaClient:       athenaClient,
+		glueClient:         glueClient,
 		db:                 d,
 		catalog:            d.catalog,
 		schema:             d.schema,
@@ -134,7 +143,7 @@ func (d *databaseImpl) buildAWSConfig(ctx context.Context) (aws.Config, error) {
 	return cfg, nil
 }
 
-func (d *databaseImpl) GetOption(key string) (string, error) {
+func (d *databaseImpl) GetOption(ctx context.Context, key string) (string, error) {
 	switch key {
 	case OptionRegion:
 		return d.region, nil
@@ -157,20 +166,20 @@ func (d *databaseImpl) GetOption(key string) (string, error) {
 	case OptionProfileName:
 		return d.profileName, nil
 	default:
-		return d.DatabaseImplBase.GetOption(key)
+		return d.DatabaseImplBase.GetOption(ctx, key)
 	}
 }
 
-func (d *databaseImpl) SetOptions(options map[string]string) error {
+func (d *databaseImpl) SetOptions(ctx context.Context, options map[string]string) error {
 	for k, v := range options {
-		if err := d.SetOption(k, v); err != nil {
+		if err := d.SetOption(ctx, k, v); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (d *databaseImpl) SetOption(key, value string) error {
+func (d *databaseImpl) SetOption(ctx context.Context, key, value string) error {
 	switch key {
 	case OptionRegion:
 		d.region = value
@@ -201,7 +210,7 @@ func (d *databaseImpl) SetOption(key, value string) error {
 	case OptionProfileName:
 		d.profileName = value
 	default:
-		return d.DatabaseImplBase.SetOption(key, value)
+		return d.DatabaseImplBase.SetOption(ctx, key, value)
 	}
 	return nil
 }
